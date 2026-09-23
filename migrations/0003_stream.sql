@@ -1,0 +1,6 @@
+ALTER TABLE movie ADD COLUMN stream_uid TEXT;
+ALTER TABLE movie ADD COLUMN hls_url TEXT;
+ALTER TABLE movie ADD COLUMN thumbnail_url TEXT;
+ALTER TABLE movie ADD COLUMN download_url TEXT;
+ALTER TABLE movie ADD COLUMN ready_to_stream INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE movie ADD COLUMN pull_token TEXT;

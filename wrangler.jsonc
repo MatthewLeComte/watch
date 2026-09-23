@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "watch",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-21",
+  "account_id": "ad27c69f849db0d1d354ce488d0b3ae6",
+  "workers_dev": false,
+  "preview_urls": false,
+  "build": {
+    "command": "node tools/code-ship-only.mjs",
+    "watch_dir": "src"
+  },
+  "observability": { "enabled": true },
+  "routes": [
+    { "pattern": "watch.cornerstonecoatings.com", "custom_domain": true }
+  ],
+  "vars": {
+    "WATCH_KEY": "a68596aee3429a00eea168ccc408af7f00235119bfce7e07152f92013cecc164"
+  },
+  "ai": { "binding": "AI" },
+  "stream": { "binding": "STREAM" },
+  "d1_databases": [
+    {
+      "binding": "watch",
+      "database_name": "watch",
+      "database_id": "2d26cd1f-e8e9-41fc-a17f-e36106702537",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "watch_bucket",
+      "bucket_name": "watch"
+    }
+  ]
+}

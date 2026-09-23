@@ -1,0 +1,67 @@
+name: Watch
+options:
+  bundleIdPrefix: fun.apps
+  deploymentTarget:
+    iOS: "26.0"
+  defaultConfig: Debug
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: QB54A5B6LN
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGNING_ALLOWED: YES
+    CODE_SIGNING_REQUIRED: YES
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY: YES
+    GENERATE_INFOPLIST_FILE: YES
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: "1.0.0"
+    PRODUCT_NAME: Watch
+    PRODUCT_BUNDLE_IDENTIFIER: watch.apps
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+targets:
+  Watch:
+    type: application
+    supportedDestinations: [iOS, iPadOS, macOS]
+    deploymentTarget:
+      iOS: "26.0"
+      macOS: "26.0"
+    sources:
+      - path: WatchApp.swift
+      - path: Model
+      - path: Playback
+      - path: UI
+      - path: Assets.xcassets
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Watch
+        CFBundleIconName: AppIcon
+        UILaunchScreen:
+          UIColorName: ""
+        LSApplicationCategoryType: public.app-category.entertainment
+        ITSAppUsesNonExemptEncryption: false
+        UIFileSharingEnabled: false
+        UIBackgroundModes:
+          - audio
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Movie
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.mpeg-4
+              - com.apple.quicktime-movie
+              - public.movie
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: watch.apps
+        PRODUCT_NAME: Watch
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: QB54A5B6LN
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]": Watch.entitlements
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": Watch.entitlements
+    scheme:
+      shared: true

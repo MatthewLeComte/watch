@@ -1,0 +1,10 @@
+// Forces Xcode to do 100% automatic codesigning.
+// No manual profiles, no hardcoded identities, no leftover provisioning specifiers.
+// Apply this to your target's Debug and Release configurations.
+
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = Apple Development
+DEVELOPMENT_TEAM =
+PROVISIONING_PROFILE_SPECIFIER =
+
+// Let Xcode generate and manage everything based on the logged-in Apple ID / team
