@@ -1,6 +1,6 @@
 import type { Env } from "./env";
-import { imdbTitle } from "./imdb";
-import { ingest } from "./ingest";
+import { cinemetaMeta } from "./cinemeta";
+import { ingest, saveCache } from "./ingest";
 import { contentTypeFor, extOf, parseByteRange, parseReleaseName, srtToVtt } from "./lib";
 import { handleWatchMcp } from "./mcp";
 
@@ -20,7 +20,6 @@ type MovieRow = {
   runtime_min: number | null;
   genres_json: string;
   imdb_id: string | null;
-  tmdb_id: string | null;
   os_hash: string | null;
   stream_uid: string | null;
   hls_url: string | null;
@@ -53,8 +52,19 @@ export default {
     if (request.method === "GET" && (path === "/" || path === "/health" || path === "/v1/health")) {
       return json({ ok: true, name: "watch" });
     }
+    if (path === "/v1/catalog" && request.method === "GET") return publicCatalog(env);
     const pull = path.match(/^\/v1\/pull\/([0-9a-f-]{36})$/i);
     if (pull && (request.method === "GET" || request.method === "HEAD")) return pullForStream(env, pull[1]!, request);
+    const asset = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/(poster|backdrop)$/i);
+    if (asset && (request.method === "GET" || request.method === "HEAD")) {
+      const id = asset[1]!;
+      const kind = asset[2]!.toLowerCase();
+      return kind === "poster" ? posterAsset(env, id) : backdropAsset(env, id);
+    }
+    const publicMedia = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/media$/i);
+    if (publicMedia && (request.method === "GET" || request.method === "HEAD")) {
+      return media(request, env, publicMedia[1]!);
+    }
     if (path === "/mcp" || path === "/api/mcp") {
       if (!authorized(request, env.WATCH_KEY || "")) return json({ ok: false, error: "unauthorized" }, 401);
       return handleWatchMcp(request, env);
@@ -75,10 +85,6 @@ export default {
       if (rest === "purge" && request.method === "POST") return purgeOriginal(env, id);
       if (rest === "playback" && request.method === "GET") return playbackItem(env, id);
       if (rest === "rematch" && request.method === "POST") return rematch(env, id);
-      if (rest === "media" && (request.method === "GET" || request.method === "HEAD")) {
-        return media(request, env, id);
-      }
-      if (rest === "poster" && request.method === "GET") return poster(env, id);
       if (rest === "poster" && request.method === "PUT") return putPoster(request, env, id);
       const part = rest.match(/^parts\/(\d+)$/);
       if (part && request.method === "PUT") return uploadPart(request, env, id, Number(part[1]));
@@ -365,26 +371,40 @@ export async function patchItem(request: Request, env: Env, id: string): Promise
   };
   const imdbId = typeof body.imdbId === "string" ? body.imdbId.trim().toLowerCase() : "";
   if (/^tt\d{7,8}$/.test(imdbId)) {
-    const page = await imdbTitle(imdbId);
+    const page = await cinemetaMeta(imdbId);
     if (!page) return json({ error: "imdb_not_found" }, 404);
-    let poster = false;
-    if (page.posterUrl) {
+    // Store both images to R2 — same write path the matcher uses, so the
+    // Roku endpoints light up immediately after a manual correction.
+    if (page.poster) {
       try {
-        const img = await fetch(page.posterUrl, { signal: AbortSignal.timeout(8000) });
+        const img = await fetch(page.poster, { signal: AbortSignal.timeout(8000) });
         if (img.ok) {
           const buf = await img.arrayBuffer();
-          if (buf.byteLength > 32 && buf.byteLength < 8_000_000) {
+          if (buf.byteLength >= 4096 && buf.byteLength <= 1_000_000) {
             await env.watch_bucket.put(`poster/${id}`, buf, {
               httpMetadata: { contentType: img.headers.get("content-type") || "image/jpeg" },
             });
-            poster = true;
           }
         }
-      } catch {
-        poster = false;
-      }
+      } catch { /* keep going without poster */ }
     }
-    void poster;
+    if (page.background) {
+      try {
+        const img = await fetch(page.background, { signal: AbortSignal.timeout(8000) });
+        if (img.ok) {
+          const buf = await img.arrayBuffer();
+          if (buf.byteLength >= 4096 && buf.byteLength <= 1_500_000) {
+            await env.watch_bucket.put(`backdrop/${id}`, buf, {
+              httpMetadata: { contentType: img.headers.get("content-type") || "image/jpeg" },
+            });
+          }
+        }
+      } catch { /* keep going without backdrop */ }
+    }
+    const year = page.year ? Number(page.year) || null : null;
+    const trailerSite = page.trailerKey ? "youtube" : null;
+    const trailerKey = page.trailerKey || null;
+    const trailerUrl = page.trailerKey ? `https://www.youtube.com/watch?v=${page.trailerKey}` : null;
     await env.watch
       .prepare(
         `UPDATE movie SET title = ?, year = ?, overview = ?, runtime_min = ?, genres_json = ?,
@@ -392,20 +412,35 @@ export async function patchItem(request: Request, env: Env, id: string): Promise
          match_source = 'manual', match_note = ?, updated_at = ? WHERE id = ?`,
       )
       .bind(
-        page.title || imdbId,
-        page.year,
-        page.overview,
+        page.name || imdbId,
+        year,
+        page.description,
         page.runtimeMin,
         JSON.stringify(page.genres),
         imdbId,
-        page.trailerSite,
-        page.trailerKey,
-        page.trailerUrl,
+        trailerSite,
+        trailerKey,
+        trailerUrl,
         `Corrected to ${imdbId}`,
         new Date().toISOString(),
         id,
       )
       .run();
+    // Refresh the per-imdbId cache so the next file that resolves to
+    // this id inherits the manual correction instead of re-fetching.
+    if (page.name || page.description || page.poster) {
+      await saveCache(env, imdbId, {
+        title: page.name,
+        year,
+        overview: page.description,
+        posterUrl: page.poster,
+        backdropUrl: page.background,
+        runtimeMin: page.runtimeMin,
+        genres: page.genres,
+        imdbId,
+        trailerKey: page.trailerKey,
+      });
+    }
     return json(await loadItem(env, id));
   }
   const current = await env.watch.prepare("SELECT id FROM movie WHERE id = ?").bind(id).first();
@@ -515,14 +550,48 @@ async function media(request: Request, env: Env, id: string): Promise<Response> 
   return json({ error: "use_playback", hls: true }, 409);
 }
 
-async function poster(env: Env, id: string): Promise<Response> {
-  const obj = await env.watch_bucket.get(`poster/${id}`);
-  if (!obj) return json({ error: "no_poster" }, 404);
-  const headers = new Headers();
+async function publicCatalog(env: Env): Promise<Response> {
+  const res = await listItems(env);
+  const body = await res.text();
+  const headers = new Headers(ASSET_CORS);
+  headers.set("content-type", "application/json");
+  headers.set("cache-control", "public, max-age=60");
+  return new Response(body, { status: 200, headers });
+}
+
+async function posterAsset(env: Env, id: string): Promise<Response> {
+  return serveImageAsset(env, id, "poster", "no_poster");
+}
+
+async function backdropAsset(env: Env, id: string): Promise<Response> {
+  return serveImageAsset(env, id, "backdrop", "no_backdrop");
+}
+
+async function serveImageAsset(
+  env: Env,
+  id: string,
+  kind: "poster" | "backdrop",
+  notFoundError: string,
+): Promise<Response> {
+  const obj = await env.watch_bucket.get(`${kind}/${id}`);
+  const type = obj?.httpMetadata?.contentType || "";
+  const valid = obj && (type === "image/jpeg" || type === "image/webp") && obj.size >= 4096 && obj.size <= 2 * 1024 * 1024;
+  if (!valid) {
+    const headers = new Headers(ASSET_CORS);
+    headers.set("content-type", "application/json");
+    headers.set("cache-control", "public, max-age=300");
+    return new Response(JSON.stringify({ error: notFoundError }), { status: 404, headers });
+  }
+  const headers = new Headers(ASSET_CORS);
   obj.writeHttpMetadata(headers);
-  headers.set("cache-control", "private, max-age=86400");
+  headers.set("cache-control", "public, max-age=604800, immutable");
   return new Response(obj.body, { headers });
 }
+
+const ASSET_CORS: Record<string, string> = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, HEAD",
+};
 
 async function putPoster(request: Request, env: Env, id: string): Promise<Response> {
   const type = request.headers.get("content-type") || "";
@@ -597,13 +666,14 @@ function toItem(row: MovieRow, subs: SubRow[]) {
     runtimeMin: row.runtime_min,
     genres,
     imdbId: row.imdb_id,
-    tmdbId: row.tmdb_id,
     osHash: row.os_hash,
     streamId: row.stream_uid,
     hlsUrl: row.hls_url,
     thumbnailUrl: row.thumbnail_url,
     downloadUrl: row.download_url,
     readyToStream: Boolean(row.ready_to_stream),
+    posterUrl: `https://watch.cornerstonecoatings.com/v1/items/${row.id}/poster`,
+    backdropUrl: `https://watch.cornerstonecoatings.com/v1/items/${row.id}/backdrop`,
     trailerSite: row.trailer_site,
     trailerKey: row.trailer_key,
     trailerUrl: row.trailer_url,

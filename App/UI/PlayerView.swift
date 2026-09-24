@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import AVKit
+import UIKit
 
 struct PlayerView: View {
     @Environment(LibraryModel.self) private var library
@@ -69,9 +70,6 @@ struct PlayerView: View {
         }
         .contentShape(Rectangle())
         .onDisappear { model?.stop() }
-        #if os(macOS)
-        .onExitCommand { onClose() }
-        #endif
     }
 
     private var backButton: some View {
@@ -261,8 +259,8 @@ struct CaptionMenuButton: View {
 
     var body: some View {
         let side: CGFloat = 40
-        if #available(iOS 26.4, macOS 26.4, *) {
-            NativeCaptionMenuButton(player: player)
+        if #available(iOS 27.0, *) {
+            NativeCaptionMenuButtonIOS(player: player)
                 .frame(width: side, height: side)
                 .contentShape(Circle())
                 .glassEffect(.regular, in: Circle())
@@ -273,21 +271,7 @@ struct CaptionMenuButton: View {
 /// Native caption menu button using AVLegibleMediaOptionsMenuController.
 /// On iOS: UIButton with showsMenuAsPrimaryAction
 /// On macOS: NSButton with menu popUp
-@available(iOS 26.4, macOS 26.4, *)
-private struct NativeCaptionMenuButton: View {
-    let player: AVPlayer
-
-    var body: some View {
-        #if os(iOS)
-        NativeCaptionMenuButtonIOS(player: player)
-        #else
-        NativeCaptionMenuButtonMac(player: player)
-        #endif
-    }
-}
-
-#if os(iOS)
-@available(iOS 26.4, *)
+@available(iOS 27.0, *)
 private struct NativeCaptionMenuButtonIOS: UIViewRepresentable {
     let player: AVPlayer
     func makeUIView(context: Context) -> UIButton {
@@ -301,35 +285,6 @@ private struct NativeCaptionMenuButtonIOS: UIViewRepresentable {
         button.menu = AVLegibleMediaOptionsMenuController(player: player).menu(contents: .all)
     }
 }
-#else
-@available(macOS 26.4, *)
-private struct NativeCaptionMenuButtonMac: NSViewRepresentable {
-    let player: AVPlayer
-    func makeNSView(context: Context) -> NSButton {
-        let button = NSButton()
-        button.bezelStyle = .inline
-        button.isBordered = false
-        button.contentTintColor = .white
-        button.image = NSImage(systemSymbolName: "captions.bubble", accessibilityDescription: "Subtitles")
-        button.target = context.coordinator
-        button.action = #selector(Coordinator.pop(_:))
-        context.coordinator.player = player
-        return button
-    }
-    func updateNSView(_ button: NSButton, context: Context) {
-        context.coordinator.player = player
-    }
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    final class Coordinator: NSObject {
-        var player: AVPlayer?
-        @objc func pop(_ sender: NSButton) {
-            guard let player else { return }
-            let menu = AVLegibleMediaOptionsMenuController(player: player).menu(contents: .all)
-            menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height), in: sender)
-        }
-    }
-}
-#endif
 
 /// Fit the picture in the play area. Lift 0 is centered; lift is strictly
 /// manual (drag) and never starts raised. Pan moves a zoomed picture and is

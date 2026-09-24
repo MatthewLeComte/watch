@@ -6,7 +6,9 @@ Host: `https://watch.cornerstonecoatings.com`
 Bundle: `watch.apps`  
 Worker name: `watch`
 
-Upload MP4, M4V, or MOV from Settings. At ingest the worker reads the filename, looks up the film (OpenSubtitles hash for that exact file when `OPENSUBTITLES_API_KEY` is set, TMDB when `TMDB_API_KEY` is set, otherwise Wikipedia), and stores the poster. If several films still fit, one Jev call on the Make unified-billing gateway picks among those ids. It does not call again.
+Upload MP4, M4V, or MOV from Settings. At ingest the worker reads the filename, resolves the IMDb id (from the filename, or by searching Stremio Cinemeta), and pulls the full metadata (title, year, overview, runtime, genres, poster, 16:9 backdrop, YouTube trailer) from Cinemeta in one call. No API key needed, no WAF challenge, no fallbacks. The result is cached by IMDb id so the next file for the same film is a single D1 read.
+
+OpenSubtitles is still consulted for subtitle files when `OPENSUBTITLES_API_KEY` is set, but only as subtitles — never for matching.
 
 MKV does not play on this device.
 
@@ -26,11 +28,10 @@ Push `main` with Make MCP (`ship`, `worker=watch`). Workers Builds runs `npm run
 npm test
 ```
 
-Optional secrets, not required for a filename match:
+Optional secret, not required for matching:
 
 ```bash
 npx wrangler secret put OPENSUBTITLES_API_KEY
-npx wrangler secret put TMDB_API_KEY
 ```
 
 Those `secret put` commands are local Wrangler and do not upload the script.

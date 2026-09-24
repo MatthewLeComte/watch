@@ -3,16 +3,6 @@ import AVKit
 import Foundation
 import Observation
 
-// Cross-platform audio session setup.
-// On iOS: configures AVAudioSession for movie playback
-// On macOS: no-op (handled automatically)
-private func configureAudioSession() {
-    #if os(iOS)
-    try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-    try? AVAudioSession.sharedInstance().setActive(true)
-    #endif
-}
-
 @MainActor
 @Observable
 final class PlayerModel {
@@ -46,7 +36,8 @@ final class PlayerModel {
     }
 
     func start(position: Double) async {
-        configureAudioSession()
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
         let local = await media.playableFile(movie)
         let hls = movie.hlsUrl.flatMap { URL(string: $0) }
         let asset: AVURLAsset
@@ -72,12 +63,21 @@ final class PlayerModel {
         }
         let seconds = max(0, position)
         if seconds > 1 {
-            await player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
+            // Fire the seek in the background instead of awaiting it.
+            // Awaiting the seek here forces AVPlayer to buffer every
+            // byte from the resource loader up to the resume point
+            // before `play()` is called — a 1 MB/round-trip loader plus
+            // a 5+ minute resume point can pin a black screen for ~20s
+            // with no progress shown. Let playback start on whatever
+            // the player has already buffered; the seek lands and the
+            // player jumps to the resume point once the data arrives.
+            Task { await player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600)) }
         }
         token = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] time in
             Task { @MainActor in self?.tick(time.seconds) }
         }
         self.player = player
+        player.play()
         playing = true
         scheduleHide()
     }

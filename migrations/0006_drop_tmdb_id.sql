@@ -1,0 +1,1 @@
+ALTER TABLE movie DROP COLUMN tmdb_id;

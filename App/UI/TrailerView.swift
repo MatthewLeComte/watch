@@ -1,10 +1,10 @@
 import SwiftUI
+import UIKit
 import WebKit
 import AVFoundation
 import AVKit
 
 /// Muted inline trailer from the IMDb match. Poster stays underneath until the page loads.
-#if os(iOS)
 struct TrailerView: UIViewRepresentable {
     var url: URL
 
@@ -18,21 +18,6 @@ struct TrailerView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 }
-#else
-struct TrailerView: NSViewRepresentable {
-    var url: URL
-
-    func makeNSView(context: Context) -> WKWebView {
-        return makeWebView(context: context)
-    }
-
-    func updateNSView(_ web: WKWebView, context: Context) {
-        updateWebView(web, context: context)
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-}
-#endif
 
 extension TrailerView {
     final class Coordinator {
@@ -42,16 +27,12 @@ extension TrailerView {
     func makeWebView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.mediaTypesRequiringUserActionForPlayback = []
-        #if os(iOS)
         config.allowsInlineMediaPlayback = true
-        #endif
         let web = WKWebView(frame: .zero, configuration: config)
-        #if os(iOS)
         web.isOpaque = false
         web.backgroundColor = .black
         web.scrollView.isScrollEnabled = false
         web.scrollView.bounces = false
-        #endif
         return web
     }
 
@@ -136,7 +117,6 @@ private enum TrailerHTML {
 }
 
 /// Unified YouTube trailer web view
-#if os(iOS)
 private struct TrailerWeb: UIViewRepresentable {
     var key: String
     var muted: Bool
@@ -151,22 +131,6 @@ private struct TrailerWeb: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 }
-#else
-private struct TrailerWeb: NSViewRepresentable {
-    var key: String
-    var muted: Bool
-
-    func makeNSView(context: Context) -> WKWebView {
-        return makeWebView(context: context)
-    }
-
-    func updateNSView(_ web: WKWebView, context: Context) {
-        updateWebView(web, context: context)
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-}
-#endif
 
 private extension TrailerWeb {
     final class Coordinator {
@@ -177,16 +141,12 @@ private extension TrailerWeb {
     func makeWebView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.mediaTypesRequiringUserActionForPlayback = []
-        #if os(iOS)
         config.allowsInlineMediaPlayback = true
-        #endif
         let web = WKWebView(frame: .zero, configuration: config)
-        #if os(iOS)
         web.isOpaque = false
         web.backgroundColor = .black
         web.scrollView.isScrollEnabled = false
         web.scrollView.bounces = false
-        #endif
         web.loadHTMLString(TrailerHTML.page(key: key), baseURL: nil)
         context.coordinator.key = key
         context.coordinator.muted = muted

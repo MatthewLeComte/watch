@@ -23,8 +23,9 @@ App icon is Eden pixel1, label `Watch`. Generator: `Work/Tooling/generate-wordma
 | Task | Open |
 |------|------|
 | Worker routes | `src/worker.ts` |
-| Ingest, OpenSubtitles, Jev | `src/ingest.ts` |
-| Filename / hash / score | `src/lib.ts` |
+| Ingest, OpenSubtitles, Cinemeta | `src/ingest.ts` |
+| Filename / hash | `src/lib.ts` |
+| Cinemeta API | `src/cinemeta.ts` |
 | App UI | `App/UI/` |
 | Playback and offline file | `App/Playback/`, `App/Model/MediaStore.swift` |
 | Xcode project | `App/project.yml` then `xcodegen generate` |

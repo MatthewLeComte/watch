@@ -71,16 +71,6 @@ function titleCase(s: string): string {
     .join(" ");
 }
 
-export function normTitle(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\b(the|a|an)\b/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 export function openSubtitlesHash(size: number, head: Uint8Array, tail: Uint8Array): string {
   if (head.byteLength < CHUNK || tail.byteLength < CHUNK) throw new Error("short");
   const mask = (1n << 64n) - 1n;
@@ -112,103 +102,6 @@ export function srtToVtt(srt: string): string {
     cues.push(`${time}\n${body}`);
   }
   return `WEBVTT\n\n${cues.join("\n\n")}\n`;
-}
-
-export type Candidate = {
-  id: string;
-  title: string;
-  year: number | null;
-  overview: string;
-  posterUrl: string | null;
-  imdbId: string | null;
-  tmdbId: string | null;
-  runtimeMin: number | null;
-  genres: string[];
-  source: string;
-};
-
-export function scoreCandidate(parsed: ParsedName, c: Candidate): number {
-  let score = 0;
-  if (parsed.imdbId && c.imdbId && parsed.imdbId === c.imdbId) score += 500;
-  if (c.source === "opensubtitles") score += 200;
-  const a = normTitle(parsed.title);
-  const b = normTitle(c.title);
-  if (a && b && a === b) score += 100;
-  else if (a && b && (a.includes(b) || b.includes(a))) score += 60;
-  else {
-    const as = new Set(a.split(" ").filter((t) => t.length > 1));
-    for (const t of b.split(" ")) if (as.has(t)) score += 15;
-  }
-  if (parsed.year != null && c.year != null) {
-    if (parsed.year === c.year) score += 40;
-    else if (Math.abs(parsed.year - c.year) === 1) score += 10;
-  }
-  return score;
-}
-
-export function needsJev(scores: number[]): boolean {
-  if (scores.length < 2) return false;
-  const sorted = [...scores].sort((x, y) => y - x);
-  const best = sorted[0] ?? 0;
-  const second = sorted[1] ?? 0;
-  if (best >= 140 && best - second >= 40) return false;
-  return true;
-}
-
-export type JevOption = { id: string; label: string };
-
-/** Parse one JSON object. Unknown or missing ids fail the whole answer. No retry. */
-export function parseJevProbs(
-  text: string,
-  allowed: ReadonlySet<string>,
-): { id: string; p: number }[] | null {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-  const probs = (parsed as { probs?: unknown }).probs;
-  if (!Array.isArray(probs)) return null;
-  const out: { id: string; p: number }[] = [];
-  for (const row of probs) {
-    if (!row || typeof row !== "object") return null;
-    const id = String((row as { id?: unknown }).id ?? "");
-    const p = Number((row as { p?: unknown }).p);
-    if (!allowed.has(id) || !Number.isFinite(p) || p < 0) return null;
-    out.push({ id, p });
-  }
-  if (new Set(out.map((r) => r.id)).size !== allowed.size || out.length !== allowed.size) return null;
-  const sum = out.reduce((s, r) => s + r.p, 0);
-  if (sum <= 0) return null;
-  return out.map((r) => ({ id: r.id, p: r.p / sum })).sort((a, b) => b.p - a.p);
-}
-
-/** One completion. Fixed ids only. Returns null if the model is unusable. */
-export async function jevPick(
-  options: JevOption[],
-  context: string,
-  complete: (prompt: string) => Promise<string>,
-): Promise<{ id: string; p: number } | null> {
-  if (options.length < 2) return null;
-  const allowed = new Set(options.map((o) => o.id));
-  const lines = options.map((o) => `- id: ${o.id}\n  label: ${o.label}`).join("\n");
-  const prompt = [
-    "Pick the movie this file is.",
-    "Reply with JSON only, no markdown.",
-    'Schema: {"probs":[{"id":"<one of the ids>","p":<number>}]}',
-    "Every id below must appear exactly once. Probabilities are numbers that sum to 1.",
-    "Do not invent ids. Do not ask questions.",
-    `File: ${context}`,
-    "Options:",
-    lines,
-  ].join("\n");
-  const text = await complete(prompt);
-  const probs = parseJevProbs(text, allowed);
-  return probs?.[0] ?? null;
 }
 
 export function parseByteRange(

@@ -1,13 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  jevPick,
-  needsJev,
   openSubtitlesHash,
   parseByteRange,
-  parseJevProbs,
   parseReleaseName,
-  scoreCandidate,
   srtToVtt,
 } from "../src/lib.ts";
 
@@ -43,43 +39,6 @@ test("srt becomes webvtt and drops cue numbers", () => {
   assert.match(vtt, /00:00:01\.000 --> 00:00:04\.000/);
   assert.match(vtt, /Hello/);
   assert.equal(vtt.includes("\n1\n"), false);
-});
-
-test("an exact title and year does not ask Jev", () => {
-  const parsed = parseReleaseName("The Apartment (1960).mp4");
-  const exact = scoreCandidate(parsed, {
-    id: "a", title: "The Apartment", year: 1960, overview: "", posterUrl: null,
-    imdbId: null, tmdbId: null, runtimeMin: null, genres: [], source: "wikipedia",
-  });
-  const other = scoreCandidate(parsed, {
-    id: "b", title: "The Apartment", year: 1996, overview: "", posterUrl: null,
-    imdbId: null, tmdbId: null, runtimeMin: null, genres: [], source: "wikipedia",
-  });
-  assert.equal(needsJev([exact, other]), false);
-});
-
-test("two close titles need one Jev call", async () => {
-  assert.equal(needsJev([80, 70]), true);
-  let calls = 0;
-  const picked = await jevPick(
-    [
-      { id: "a", label: "The Apartment (1960)" },
-      { id: "b", label: "Apartment for Peggy (1948)" },
-    ],
-    "The.Apartment.1960.mkv",
-    async () => {
-      calls += 1;
-      return JSON.stringify({ probs: [{ id: "a", p: 0.8 }, { id: "b", p: 0.2 }] });
-    },
-  );
-  assert.equal(calls, 1);
-  assert.equal(picked?.id, "a");
-  assert.ok(Math.abs((picked?.p ?? 0) - 0.8) < 0.001);
-});
-
-test("Jev rejects an id that was not offered", () => {
-  const parsed = parseJevProbs('{"probs":[{"id":"nope","p":1},{"id":"a","p":0}]}', new Set(["a", "b"]));
-  assert.equal(parsed, null);
 });
 
 test("byte ranges stay inside an 8 megabyte window", () => {

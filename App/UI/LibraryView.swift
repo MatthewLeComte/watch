@@ -7,6 +7,7 @@ struct LibraryView: View {
     @State private var correcting: Movie?
     @State private var pendingImport: URL?
     @State private var pendingScoped = false
+    @State private var bulkSheetPresented = false
     @State private var muted = true
     @State private var featuredID: String?
     @State private var videoAspect: CGFloat = 16.0 / 9.0
@@ -34,16 +35,24 @@ struct LibraryView: View {
             .sheet(item: $correcting) { movie in
                 CorrectMatchView(movie: movie)
             }
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.mpeg4Movie, .quickTimeMovie, .movie]) { result in
-                guard case .success(let url) = result else { return }
-                let ext = url.pathExtension.lowercased()
-                let scoped = url.startAccessingSecurityScopedResource()
-                guard ["mp4", "m4v", "mov"].contains(ext) else {
-                    if scoped { url.stopAccessingSecurityScopedResource() }
-                    return
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.mpeg4Movie, .quickTimeMovie, .movie], allowsMultipleSelection: true) { result in
+                guard case .success(let urls) = result else { return }
+                var items: [(URL, Bool)] = []
+                for url in urls {
+                    let ext = url.pathExtension.lowercased()
+                    guard ["mp4", "m4v", "mov"].contains(ext) else { continue }
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    items.append((url, scoped))
                 }
-                pendingScoped = scoped
-                pendingImport = url
+                guard !items.isEmpty else { return }
+                if items.count == 1, let only = items.first {
+                    pendingImport = nil
+                    pendingScoped = only.1
+                    pendingImport = only.0
+                } else {
+                    pendingImport = nil
+                    library.importBulk(items)
+                }
             }
             .overlay {
                 // Full-page import on every screen. fullScreenCover is iOS-only;
@@ -54,6 +63,15 @@ struct LibraryView: View {
                         pendingImport = nil
                     }
                 }
+            }
+            .sheet(isPresented: $bulkSheetPresented) {
+                BulkImportView(onClose: {
+                    if library.bulkAllFinished { library.clearFinishedBulk() }
+                    bulkSheetPresented = false
+                })
+            }
+            .onChange(of: library.bulkItems.count) { _, c in
+                if c > 0 && !bulkSheetPresented { bulkSheetPresented = true }
             }
             .modifier(PlayerCover(isPresented: Binding(
                 get: { playing != nil },

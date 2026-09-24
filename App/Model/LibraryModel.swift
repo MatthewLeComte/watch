@@ -1,43 +1,20 @@
 import Foundation
 import Observation
-#if os(iOS)
 import UIKit
-#endif
 
-// Cross-platform background task abstraction.
-// On iOS: uses UIApplication.beginBackgroundTask
-// On macOS: no-op (apps can run in background by default)
-private struct BackgroundTask {
-    #if os(iOS)
-    private let token: UIBackgroundTaskIdentifier
-    #else
-    private let token: Int
-    #endif
-
-    #if os(iOS)
-    private init(token: UIBackgroundTaskIdentifier) {
-        self.token = token
-    }
-    #else
-    private init(token: Int) {
-        self.token = token
-    }
-    #endif
-
-    static func begin(named name: String) -> BackgroundTask {
-        #if os(iOS)
-        return BackgroundTask(token: UIApplication.shared.beginBackgroundTask(withName: name) {})
-        #else
-        return BackgroundTask(token: 0)
-        #endif
-    }
-
-    func end() {
-        #if os(iOS)
-        UIApplication.shared.endBackgroundTask(token)
-        #endif
-    }
+struct BulkItem: Identifiable {
+    var id: UUID = UUID()
+    var url: URL
+    var scoped: Bool
+    var progress: Double = 0
+    var stage: String = "Queued"
+    var status: BulkStatus = .pending
+    var error: String? = nil
+    var movieTitle: String? = nil
+    var movieID: String? = nil
 }
+
+enum BulkStatus { case pending, uploading, done, failed }
 
 @MainActor
 @Observable
@@ -226,8 +203,8 @@ final class LibraryModel {
         downloading[movie.id] = fractions[movie.id] ?? 0
         let api = self.api
         downloads[movie.id] = Task {
-            let backgroundTask = BackgroundTask.begin(named: "watch.save")
-            defer { backgroundTask.end() }
+        let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "watch.save") {}
+        defer { UIApplication.shared.endBackgroundTask(backgroundTask) }
             do {
                 for try await fraction in await media.prefetch(api: api, movie: movie) {
                     downloading[movie.id] = fraction
@@ -269,6 +246,97 @@ final class LibraryModel {
         let dir = root.appendingPathComponent("Watch", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("library.json")
+    }
+
+    // MARK: - Bulk import (dedicated multi-upload view)
+
+    var bulkItems: [BulkItem] = []
+    private var bulkInFlight: Int = 0
+    private var bulkPending: [BulkItem] = []
+    private let bulkMaxConcurrent = 2
+
+    var bulkRunningCount: Int {
+        bulkItems.filter { $0.status == .pending || $0.status == .uploading }.count
+    }
+    var bulkAllFinished: Bool {
+        !bulkItems.isEmpty && bulkItems.allSatisfy { $0.status == .done || $0.status == .failed }
+    }
+
+    func importBulk(_ urls: [(URL, Bool)]) {
+        let new = urls.map { BulkItem(url: $0.0, scoped: $0.1) }
+        bulkItems.append(contentsOf: new)
+        bulkPending.append(contentsOf: new)
+        pumpBulk()
+    }
+
+    func retryBulk(id: UUID) {
+        guard let i = bulkItems.firstIndex(where: { $0.id == id }) else { return }
+        bulkItems[i].status = .pending
+        bulkItems[i].error = nil
+        bulkItems[i].progress = 0
+        bulkItems[i].stage = "Queued"
+        bulkPending.append(bulkItems[i])
+        pumpBulk()
+    }
+
+    func removeBulk(id: UUID) {
+        bulkItems.removeAll { $0.id == id }
+        bulkPending.removeAll { $0.id == id }
+    }
+
+    func clearFinishedBulk() {
+        bulkItems.removeAll { $0.status == .done || $0.status == .failed }
+    }
+
+    private func pumpBulk() {
+        while bulkInFlight < bulkMaxConcurrent, let next = bulkPending.first {
+            bulkPending.removeFirst()
+            bulkInFlight += 1
+            runBulkOne(next)
+        }
+    }
+
+    private func runBulkOne(_ item: BulkItem) {
+        updateBulk(id: item.id) {
+            $0.status = .uploading
+            $0.stage = "Preparing"
+        }
+        let model = ImportModel()
+        model.onProgress = { [weak self] overall, stage, _ in
+            self?.updateBulk(id: item.id) {
+                $0.progress = overall
+                $0.stage = stage
+            }
+        }
+        model.onError = { [weak self] msg in
+            guard let self else { return }
+            self.updateBulk(id: item.id) {
+                $0.status = .failed
+                $0.error = msg
+                $0.stage = "Failed"
+            }
+            self.bulkInFlight -= 1
+            self.pumpBulk()
+        }
+        model.start(url: item.url, scoped: item.scoped, api: self.api) { [weak self] movie in
+            guard let self else { return }
+            self.updateBulk(id: item.id) {
+                $0.status = .done
+                $0.progress = 1
+                $0.stage = "Done"
+                $0.movieTitle = movie.displayTitle
+                $0.movieID = movie.id
+            }
+            self.adopt(movie)
+            self.bulkInFlight -= 1
+            self.pumpBulk()
+        }
+    }
+
+    private func updateBulk(id: UUID, _ mutate: (inout BulkItem) -> Void) {
+        if let i = bulkItems.firstIndex(where: { $0.id == id }) {
+            mutate(&bulkItems[i])
+        }
     }
 }
 

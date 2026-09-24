@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 import Observation
 import SwiftUI
@@ -25,6 +25,9 @@ final class ImportModel {
     var onProgress: ((Double, String, String) -> Void)?
     /// First-frame preview of the picked file, filled in before stage 1.
     var preview: Image?
+    /// Bulk runner hook: called when the import fails so the caller can
+    /// free its concurrency slot. onDone fires only on success.
+    var onError: ((String) -> Void)?
     private var task: Task<Void, Never>?
     private var matchMovie: Movie?
     private var matchResume: CheckedContinuation<Movie, Never>?
@@ -80,17 +83,18 @@ final class ImportModel {
             defer { try? FileManager.default.removeItem(at: inbox) }
             preview = await Self.firstFrame(of: inbox)
 
-            // Stage 1 — process.
-            phase = .processing(progress: 0, detail: "Starting transcode…")
-            emit(0.02, "Transcoding", "Starting transcode…")
-            let source = try await transcodeToHEVC(inbox)
-            // DEBUG: Export encoded file to Documents for VMAF testing
-            if ProcessInfo.processInfo.environment["DEBUG_EXPORT"] == "1" {
-                let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-                let debugOut = docs.appendingPathComponent("DEBUG-\(UUID().uuidString).mp4")
-                try? FileManager.default.copyItem(at: source, to: debugOut)
-                print("DEBUG EXPORT: \(debugOut.path)")
-            }
+            // // Stage 1 — process.
+            // phase = .processing(progress: 0, detail: "Starting transcode…")
+            // emit(0.02, "Transcoding", "Starting transcode…")
+            // let source = try await transcodeToHEVC(inbox)
+            // // DEBUG: Export encoded file to Documents for VMAF testing
+            // if ProcessInfo.processInfo.environment["DEBUG_EXPORT"] == "1" {
+            //     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            //     let debugOut = docs.appendingPathComponent("DEBUG-\(UUID().uuidString).mp4")
+            //     try? FileManager.default.copyItem(at: source, to: debugOut)
+            //     print("DEBUG EXPORT: \(debugOut.path)")
+            // }
+            let source = inbox
             defer { if source != inbox { try? FileManager.default.removeItem(at: source) } }
             let size = (try source.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
             guard size > 0 else { throw WatchError.server("Empty file") }
@@ -116,31 +120,38 @@ final class ImportModel {
                 try await api.uploadPart(id: created.id, part: part, file: slice)
                 offset += UInt64(chunk.count)
                 part += 1
-                let frac = Double(offset) / Double(size)
-                let detail = "Part \(min(part - 1, totalParts)) of \(totalParts) — \(byteText(Int64(offset))) of \(byteText(size))"
-                phase = .uploading(progress: frac, detail: detail)
-                emit(0.5 + 0.5 * frac, "Uploading", detail)
+let frac = size > 0 ? Double(offset) / Double(size) : 0
+                 let detail = "Part \(min(part - 1, totalParts)) of \(totalParts) — \(byteText(Int64(offset))) of \(byteText(size))"
+                 phase = .uploading(progress: frac, detail: detail)
+                 emit(0.5 + 0.5 * frac, "Uploading", detail)
             }
 
             phase = .finishing
             emit(0.99, "Finishing", "Finalizing…")
-            var movie = try await api.complete(id: created.id)
-            // Ingest ran once on the server. Show its auto-match for
-            // confirm/adjust here — never re-ingest, never guess.
-            movie = try await api.one(id: created.id)
-            matchMovie = movie
-            phase = .match(movie)
-            emit(1.0, "Matching", movie.matchNote.isEmpty ? "Auto-match ready" : movie.matchNote)
-            movie = await withCheckedContinuation { matchResume = $0 }
-            matchResume = nil
-            matchMovie = nil
-            try Task.checkCancellation()
-            phase = .done(title: movie.displayTitle)
-            onDone(movie)
+            _ = try await api.complete(id: created.id)
+            let final = try await api.one(id: created.id)
+            phase = .done(title: final.displayTitle)
+            onDone(final)
+            // // Ingest ran once on the server. Show its auto-match for
+            // // confirm/adjust here — never re-ingest, never guess.
+            // var movie = try await api.complete(id: created.id)
+            // movie = try await api.one(id: created.id)
+            // matchMovie = movie
+            // phase = .match(movie)
+            // emit(1.0, "Matching", movie.matchNote.isEmpty ? "Auto-match ready" : movie.matchNote)
+            // movie = await withCheckedContinuation { matchResume = $0 }
+            // matchResume = nil
+            // matchMovie = nil
+            // try Task.checkCancellation()
+            // phase = .done(title: movie.displayTitle)
+            // onDone(movie)
         } catch is CancellationError {
             phase = .failed(message: "Cancelled.")
+            onError?("Cancelled.")
         } catch {
-            phase = .failed(message: error.localizedDescription)
+            let msg = error.localizedDescription
+            phase = .failed(message: msg)
+            onError?(msg)
         }
     }
 
@@ -207,8 +218,11 @@ final class ImportModel {
         sourceReader.add(readerOutput)
 
         // Audio passthrough (copy)
-        var audioInput: AVAssetWriterInput?
-        var audioOutput: AVAssetReaderTrackOutput?
+        final class AudioRefs: @unchecked Sendable {
+            var input: AVAssetWriterInput?
+            var output: AVAssetReaderTrackOutput?
+        }
+        let audioRefs = AudioRefs()
         if let audioTrack {
             let formatDescs = try? await audioTrack.load(.formatDescriptions)
             if let formatDesc = formatDescs?.first {
@@ -223,64 +237,121 @@ final class ImportModel {
                     let aIn = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
                     aIn.expectsMediaDataInRealTime = false
                     writer.add(aIn)
-                    audioInput = aIn
+                    audioRefs.input = aIn
 
                     let audioReader = try AVAssetReader(asset: asset)
-                    audioOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
-                    audioReader.add(audioOutput!)
+                    let aOut = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
+                    audioReader.add(aOut)
                     audioReader.startReading()
+                    audioRefs.output = aOut
                 }
             }
         }
 
         return try await withCheckedThrowingContinuation { continuation in
+            final class TranscodeState: @unchecked Sendable {
+                let writer: AVAssetWriter
+                let inputWriter: AVAssetWriterInput
+                let readerOutput: AVAssetReaderTrackOutput
+                let audioInput: AVAssetWriterInput?
+                let audioOutput: AVAssetReaderTrackOutput?
+                let continuation: CheckedContinuation<URL, any Error>
+                var framesWritten: Int = 0
+                let totalFrames: Int
+                let onProgress: @Sendable (Double) -> Void
+
+                init(writer: AVAssetWriter, inputWriter: AVAssetWriterInput, readerOutput: AVAssetReaderTrackOutput, audioInput: AVAssetWriterInput?, audioOutput: AVAssetReaderTrackOutput?, continuation: CheckedContinuation<URL, any Error>, totalFrames: Int, onProgress: @escaping @Sendable (Double) -> Void) {
+                    self.writer = writer
+                    self.inputWriter = inputWriter
+                    self.readerOutput = readerOutput
+                    self.audioInput = audioInput
+                    self.audioOutput = audioOutput
+                    self.continuation = continuation
+                    self.totalFrames = totalFrames
+                    self.onProgress = onProgress
+                }
+
+                func finish() {
+                    let outputURL = writer.outputURL
+                    let writeError = writer.error
+                    let cont = continuation
+                    writer.finishWriting {
+                        if let writeError {
+                            cont.resume(throwing: writeError)
+                        } else {
+                            cont.resume(returning: outputURL)
+                        }
+                    }
+                }
+
+                func startAudio(on queue: DispatchQueue) {
+                    guard let audioInput, let audioOutput else { return }
+                    audioInput.requestMediaDataWhenReady(on: queue) { [weak self] in
+                        guard let self else { return }
+                        while audioInput.isReadyForMoreMediaData {
+                            guard let sample = audioOutput.copyNextSampleBuffer() else {
+                                audioInput.markAsFinished()
+                                self.finish()
+                                return
+                            }
+                            audioInput.append(sample)
+                        }
+                    }
+                }
+            }
+
+            let onProgress: @Sendable (Double) -> Void = { [weak self] progress in
+                Task { @MainActor in
+                    guard let self else { return }
+                    let pct = Int((progress * 100).rounded())
+                    self.phase = .processing(progress: progress, detail: "Transcoding… \(pct)%")
+                    self.emit(progress * 0.5, "Transcoding", "Transcoding… \(pct)%")
+                }
+            }
+
+            let state = TranscodeState(
+                writer: writer,
+                inputWriter: inputWriter,
+                readerOutput: readerOutput,
+                audioInput: audioRefs.input,
+                audioOutput: audioRefs.output,
+                continuation: continuation,
+                totalFrames: totalFrames,
+                onProgress: onProgress
+            )
+
             writer.startWriting()
             writer.startSession(atSourceTime: .zero)
             sourceReader.startReading()
 
-            var framesWritten = 0
             let videoQueue = DispatchQueue(label: "watch.encode.video")
 
-            inputWriter.requestMediaDataWhenReady(on: videoQueue) {
-                while inputWriter.isReadyForMoreMediaData {
-                    guard let sample = readerOutput.copyNextSampleBuffer() else {
-                        inputWriter.markAsFinished()
-                        if audioInput == nil { self.finish(writer, continuation) }
+            state.inputWriter.requestMediaDataWhenReady(on: videoQueue) {
+                while state.inputWriter.isReadyForMoreMediaData {
+                    guard let sample = state.readerOutput.copyNextSampleBuffer() else {
+                        state.inputWriter.markAsFinished()
+                        if state.audioInput == nil { state.finish() }
                         return
                     }
-                    inputWriter.append(sample)
-                    framesWritten += 1
-                    if framesWritten % 30 == 0 {
-                        let progress = Double(framesWritten) / Double(totalFrames)
-                        Task { @MainActor in
-                            let pct = Int((progress * 100).rounded())
-                            self.phase = .processing(progress: progress, detail: "Transcoding… \(pct)%")
-                            self.emit(progress * 0.5, "Transcoding", "Transcoding… \(pct)%")
-                        }
+                    state.inputWriter.append(sample)
+                    state.framesWritten += 1
+                    if state.framesWritten % 30 == 0 {
+                        let progress = state.totalFrames > 0 ? Double(state.framesWritten) / Double(state.totalFrames) : 0
+                        state.onProgress(progress)
                     }
                 }
             }
 
-            if let audioInput, let audioOutput {
+            if state.audioInput != nil {
                 let audioQueue = DispatchQueue(label: "watch.encode.audio")
-                audioInput.requestMediaDataWhenReady(on: audioQueue) {
-                    while audioInput.isReadyForMoreMediaData {
-                        guard let sample = audioOutput.copyNextSampleBuffer() else {
-                            audioInput.markAsFinished()
-                            self.finish(writer, continuation)
-                            return
-                        }
-                        audioInput.append(sample)
-                    }
-                }
+                state.startAudio(on: audioQueue)
             } else {
-                // No audio track
-                self.finish(writer, continuation)
+                state.finish()
             }
         }
     }
 
-    private nonisolated func finish(_ writer: AVAssetWriter, _ continuation: CheckedContinuation<URL, Error>) {
+    private nonisolated func finish(_ writer: AVAssetWriter, _ continuation: CheckedContinuation<URL, any Error>) {
         writer.finishWriting {
             if let error = writer.error {
                 continuation.resume(throwing: error)

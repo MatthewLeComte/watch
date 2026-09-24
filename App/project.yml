@@ -2,7 +2,7 @@ name: Watch
 options:
   bundleIdPrefix: fun.apps
   deploymentTarget:
-    iOS: "26.0"
+    iOS: "27.0"
   defaultConfig: Debug
   createIntermediateGroups: true
 settings:
@@ -23,15 +23,16 @@ settings:
 targets:
   Watch:
     type: application
-    supportedDestinations: [iOS, iPadOS, macOS]
+    supportedDestinations: [iOS, iPadOS, macCatalyst]
     deploymentTarget:
-      iOS: "26.0"
-      macOS: "26.0"
+      iOS: "27.0"
     sources:
-      - path: WatchApp.swift
+      - path: Shell
+      - path: Data
+      - path: Logic
+      - path: UI
       - path: Model
       - path: Playback
-      - path: UI
       - path: Assets.xcassets
     info:
       path: Info.plist
@@ -43,6 +44,7 @@ targets:
         LSApplicationCategoryType: public.app-category.entertainment
         ITSAppUsesNonExemptEncryption: false
         UIFileSharingEnabled: false
+        LSSupportsOpeningDocumentsInPlace: true
         UIBackgroundModes:
           - audio
         CFBundleDocumentTypes:
@@ -58,6 +60,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: watch.apps
         PRODUCT_NAME: Watch
         TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MAC_CATALYST: YES
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QB54A5B6LN
         "CODE_SIGN_IDENTITY[sdk=macosx*]": "-"

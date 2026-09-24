@@ -22,13 +22,14 @@ struct Movie: Codable, Hashable, Identifiable, Sendable {
     var runtimeMin: Int?
     var genres: [String]
     var imdbId: String?
-    var tmdbId: String?
     var osHash: String?
     var streamId: String?
     var hlsUrl: String?
     var thumbnailUrl: String?
     var downloadUrl: String?
     var readyToStream: Bool?
+    var posterUrl: String?
+    var backdropUrl: String?
     var trailerSite: String?
     var trailerKey: String?
     var trailerUrl: String?

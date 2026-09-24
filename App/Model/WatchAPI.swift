@@ -27,7 +27,7 @@ struct WatchAPI: Sendable {
     }
 
     func uploadPart(id: String, part: Int, file: URL) async throws {
-        guard var components = URLComponents(url: base.appendingPathComponent("v1/items/\(id)/parts/\(part)"), resolvingAgainstBaseURL: false),
+        guard let components = URLComponents(url: base.appendingPathComponent("v1/items/\(id)/parts/\(part)"), resolvingAgainstBaseURL: false),
               let url = components.url
         else { throw WatchError.server("Bad URL") }
         _ = components

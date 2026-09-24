@@ -4,10 +4,4 @@
    <FileRef
       location = "self:">
    </FileRef>
-   <FileRef
-      location = "group:Watch.entitlements">
-   </FileRef>
-   <FileRef
-      location = "group:AutomaticSigning.xcconfig">
-   </FileRef>
 </Workspace>

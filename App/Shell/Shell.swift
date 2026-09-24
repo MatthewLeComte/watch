@@ -1,12 +1,12 @@
 import SwiftUI
 
 @main
-struct WatchApp: App {
+struct Shell: App {
     @State private var library = LibraryModel()
 
     var body: some Scene {
         WindowGroup {
-            LibraryView()
+            UI.ui_root()
                 .environment(library)
                 .preferredColorScheme(.dark)
                 .task { await library.boot() }
@@ -18,8 +18,5 @@ struct WatchApp: App {
                 }
         }
         .defaultSize(width: 1180, height: 780)
-        #if os(macOS)
-        .windowStyle(.hiddenTitleBar)
-        #endif
     }
 }
