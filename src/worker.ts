@@ -73,6 +73,7 @@ export default {
     try {
       if (request.method === "GET" && path === "/v1/items") return listItems(env);
       if (request.method === "POST" && path === "/v1/items") return createItem(request, env);
+      if (path === "/v1/items/all/rematch" && request.method === "POST") return rematchAll(env);
       const item = path.match(/^\/v1\/items\/([0-9a-f-]{36})(?:\/(.*))?$/i);
       if (!item) return json({ error: "not_found" }, 404);
       const id = item[1]!;
@@ -360,6 +361,32 @@ export async function rematch(env: Env, id: string): Promise<Response> {
   if (row.status === "uploading") return json({ error: "still_uploading" }, 409);
   await ingest(env, id);
   return json(await loadItem(env, id));
+}
+
+export async function rematchAll(env: Env, limit = 500): Promise<Response> {
+  const rows = await env.watch
+    .prepare("SELECT id, status FROM movie WHERE status != 'uploading' ORDER BY created_at ASC LIMIT ?")
+    .bind(limit)
+    .all<{ id: string; status: string }>();
+  const results: { id: string; ok: boolean; title?: string; overviewLen?: number; runtimeMin?: number | null; genres?: string[]; error?: string }[] = [];
+  for (const row of rows.results) {
+    try {
+      await ingest(env, row.id);
+      const item = await loadItem(env, row.id);
+      results.push({
+        id: row.id,
+        ok: true,
+        title: item?.title,
+        overviewLen: item?.overview?.length ?? 0,
+        runtimeMin: item?.runtimeMin ?? null,
+        genres: item?.genres ?? [],
+      });
+    } catch (e) {
+      results.push({ id: row.id, ok: false, error: e instanceof Error ? e.message : "failed" });
+    }
+  }
+  const filled = results.filter((r) => r.ok && ((r.overviewLen ?? 0) > 0 || (r.runtimeMin ?? null) != null || (r.genres?.length ?? 0) > 0)).length;
+  return json({ processed: results.length, filled, failed: results.filter((r) => !r.ok).length, results });
 }
 
 export async function patchItem(request: Request, env: Env, id: string): Promise<Response> {
