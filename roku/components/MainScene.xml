@@ -16,7 +16,7 @@
       width="1920"
       height="1080"
       notificationInterval="10"
-      enableTrickPlay="false"
+      enableTrickPlay="true"
       visible="false"
       />
     <Rectangle
