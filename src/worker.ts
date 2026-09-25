@@ -369,21 +369,29 @@ export async function rematchAll(env: Env, limit = 500): Promise<Response> {
     .bind(limit)
     .all<{ id: string }>();
   const results: { id: string; ok: boolean; title?: string; overviewLen?: number; runtimeMin?: number | null; genres?: string[]; error?: string }[] = [];
-  for (const row of rows.results) {
-    try {
-      await ingest(env, row.id);
-      const item = await loadItem(env, row.id);
-      results.push({
-        id: row.id,
-        ok: true,
-        title: item?.title,
-        overviewLen: item?.overview?.length ?? 0,
-        runtimeMin: item?.runtimeMin ?? null,
-        genres: item?.genres ?? [],
-      });
-    } catch (e) {
-      results.push({ id: row.id, ok: false, error: e instanceof Error ? e.message : "failed" });
-    }
+  // Run ingests in parallel, 6 at a time, so a single worker invocation
+  // finishes well under the 30s CPU cap while still burning the full
+  // outbound concurrency budget. One slow movie does not block the queue.
+  const BATCH = 6;
+  for (let i = 0; i < rows.results.length; i += BATCH) {
+    const slice = rows.results.slice(i, i + BATCH);
+    const batch = await Promise.all(slice.map(async (row) => {
+      try {
+        await ingest(env, row.id);
+        const item = await loadItem(env, row.id);
+        return {
+          id: row.id,
+          ok: true as const,
+          title: item?.title,
+          overviewLen: item?.overview?.length ?? 0,
+          runtimeMin: item?.runtimeMin ?? null,
+          genres: item?.genres ?? [],
+        };
+      } catch (e) {
+        return { id: row.id, ok: false as const, error: e instanceof Error ? e.message : "failed" };
+      }
+    }));
+    for (const r of batch) results.push(r);
   }
   const filled = results.filter((r) => r.ok && ((r.overviewLen ?? 0) > 0 || (r.runtimeMin ?? null) != null || (r.genres?.length ?? 0) > 0)).length;
   return json({ processed: results.length, filled, failed: results.filter((r) => !r.ok).length, results });
