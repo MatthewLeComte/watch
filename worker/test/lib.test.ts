@@ -41,10 +41,12 @@ test("srt becomes webvtt and drops cue numbers", () => {
   assert.equal(vtt.includes("\n1\n"), false);
 });
 
-test("byte ranges stay inside an 8 megabyte window", () => {
+test("byte ranges honor exactly what was asked", () => {
   const open = parseByteRange("bytes=0-", 50_000_000);
   assert.equal(open?.offset, 0);
-  assert.equal(open?.length, 8 * 1024 * 1024);
+  assert.equal(open?.length, 50_000_000);
   assert.equal(parseByteRange("bytes=10-19", 100)?.length, 10);
   assert.equal(parseByteRange("bytes=100-120", 100), null);
+  assert.equal(parseByteRange("bytes=0-49999999", 50_000_000)?.length, 50_000_000);
+  assert.equal(parseByteRange("bytes=-500", 1000)?.length, 500);
 });

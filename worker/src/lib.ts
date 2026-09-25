@@ -134,6 +134,11 @@ export function srtToVtt(srt: string): string {
   return `WEBVTT\n\n${cues.join("\n\n")}\n`;
 }
 
+/// Parse a single HTTP Range header into an exact { offset, length }.
+/// Explicit ranges are honored byte-for-byte: AVFoundation asks for the whole
+/// remainder up front and stalls forever if a 206 comes back shorter than
+/// asked (the old 8MB cap broke every native stream). Only the headerless
+/// default is bounded, and no caller serves that path to a player.
 export function parseByteRange(
   header: string | null,
   size: number,
@@ -147,16 +152,16 @@ export function parseByteRange(
   if (startRaw === "") {
     const suffix = Number(endRaw);
     if (!Number.isFinite(suffix) || suffix <= 0) return null;
-    const length = Math.min(suffix, size, MAX_RANGE);
+    const length = Math.min(suffix, size);
     return { offset: Math.max(0, size - length), length };
   }
   const offset = Number(startRaw);
   if (!Number.isFinite(offset) || offset < 0 || offset >= size) return null;
-  const end = endRaw === "" ? Math.min(size - 1, offset + MAX_RANGE - 1) : Number(endRaw);
+  const end = endRaw === "" ? size - 1 : Number(endRaw);
   if (!Number.isFinite(end) || end < offset) return null;
   const length = Math.min(end, size - 1) - offset + 1;
   if (length <= 0) return null;
-  return { offset, length: Math.min(length, MAX_RANGE) };
+  return { offset, length };
 }
 
 export function extOf(filename: string): string | null {
