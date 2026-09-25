@@ -263,11 +263,13 @@ function splitCamelCase(s: string): string {
 /** Score a Cinemeta hit against a parsed title. Higher = better match.
  *  - +100 if the candidate title starts with the first query word
  *  - +50  if the full query appears as a contiguous substring of the candidate
- *  - +10  for every query word found in the candidate, in order
+ *  - +10  for every query word found in the candidate (any position)
  *  - -50  if a query word is missing from the candidate entirely
  *  - -5   per extra word in the candidate beyond the query
  *  Short tokens (the, a, 2, e) are kept so "Patlabor 2" and "Titan A.E."
- *  can still discriminate against "Patlabor" and "Titanic". */
+ *  can still discriminate against "Patlabor" and "Titanic".
+ *  Word membership is checked with a set so a single miss (e.g. camelCase
+ *  "ShangChi" vs "Shang Chi") does not poison the rest of the scoring. */
 function scoreTitle(query: string, candidate: string): number {
   const q = norm(query);
   const c = norm(candidate);
@@ -275,14 +277,13 @@ function scoreTitle(query: string, candidate: string): number {
   const qWords = q.split(" ").filter((w) => w.length > 0);
   const cWords = c.split(" ");
   if (!qWords.length) return 0;
+  const cSet = new Set(cWords);
   let score = 0;
   if (cWords[0] === qWords[0]) score += 100;
   if (c.includes(q)) score += 50;
-  let ci = 0;
   for (const w of qWords) {
-    while (ci < cWords.length && cWords[ci] !== w) ci++;
-    if (ci >= cWords.length) score -= 50;
-    else { score += 10; ci++; }
+    if (cSet.has(w)) score += 10;
+    else score -= 50;
   }
   if (cWords.length > qWords.length) score -= 5 * (cWords.length - qWords.length);
   return score;
