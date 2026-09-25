@@ -2,7 +2,7 @@ node_modules
 .wrangler
 .dev.vars
 .DS_Store
-App/build
+ios/build
 DerivedData
 *.xcuserstate
 xcuserdata

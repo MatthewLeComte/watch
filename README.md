@@ -12,20 +12,20 @@ OpenSubtitles is still consulted for subtitle files when `OPENSUBTITLES_API_KEY`
 
 MKV does not play on this device.
 
-## App
+## iOS app
 
 ```bash
-cd App && xcodegen generate && open Watch.xcodeproj
+cd ios && xcodegen generate && open Watch.xcodeproj
 ```
 
 The library key is already in the app and the worker. Change it in Settings only if you change `WATCH_KEY`.
 
 ## Worker
 
-Push `main` with Make MCP (`ship`, `worker=watch`). Workers Builds runs `npm run deploy`. Laptop `wrangler deploy` is refused.
+Push the worker surface with Make MCP (`ship`, `worker=watch`). Workers Builds runs `npm run deploy` from `worker/`. Laptop `wrangler deploy` is refused.
 
 ```bash
-npm test
+cd worker && npm test
 ```
 
 Optional secret, not required for matching:
