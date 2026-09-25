@@ -17,7 +17,6 @@
   "vars": {
     "WATCH_KEY": "a68596aee3429a00eea168ccc408af7f00235119bfce7e07152f92013cecc164"
   },
-  "ai": { "binding": "AI" },
   "stream": { "binding": "STREAM" },
   "d1_databases": [
     {
