@@ -71,7 +71,7 @@ export default {
       // (the expensive endpoints) are gated above and below.
       const id = asset[1]!;
       const kind = asset[2]!.toLowerCase();
-      return kind === "poster" ? posterAsset(env, id) : backdropAsset(env, id);
+      return kind === "poster" ? posterAsset(env, id, request) : backdropAsset(env, id, request);
     }
     const publicMedia = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/media$/i);
     if (publicMedia && (request.method === "GET" || request.method === "HEAD")) {
@@ -744,6 +744,7 @@ async function markTrailer(
 }
 
 async function resolveTrailerFile(env: Env, id: string): Promise<ResolveResult> {
+  await ensureTrailerSchema(env);
   const movie = await env.watch
     .prepare("SELECT id, imdb_id, trailer_key, trailer_status, trailer_r2_key FROM movie WHERE id = ?")
     .bind(id)
@@ -798,6 +799,28 @@ async function resolveTrailerFile(env: Env, id: string): Promise<ResolveResult> 
 async function resolveTrailerRoute(env: Env, id: string): Promise<Response> {
   const r = await resolveTrailerFile(env, id);
   return json(r.body, r.http);
+}
+
+/** Self-healing schema: D1 migrations only run when the deploy pipeline runs
+ * them. If they didn't, resolve would 500 on missing columns forever. */
+let trailerSchemaReady = false;
+async function ensureTrailerSchema(env: Env): Promise<void> {
+  if (trailerSchemaReady) return;
+  trailerSchemaReady = true;
+  const alters = [
+    "ALTER TABLE movie ADD COLUMN trailer_r2_key TEXT",
+    "ALTER TABLE movie ADD COLUMN trailer_bytes INTEGER",
+    "ALTER TABLE movie ADD COLUMN trailer_quality TEXT",
+    "ALTER TABLE movie ADD COLUMN trailer_status TEXT DEFAULT 'missing'",
+    "ALTER TABLE movie ADD COLUMN trailer_note TEXT",
+  ];
+  for (const sql of alters) {
+    try {
+      await env.watch.prepare(sql).run();
+    } catch {
+      // Column already exists.
+    }
+  }
 }
 
 async function backfillTrailers(request: Request, env: Env): Promise<Response> {
@@ -855,17 +878,18 @@ async function rokuCatalog(env: Env): Promise<Response> {
   return new Response(body, { status: 200, headers });
 }
 
-async function posterAsset(env: Env, id: string): Promise<Response> {
-  return serveImageAsset(env, id, "poster", "no_poster");
+async function posterAsset(env: Env, id: string, request: Request): Promise<Response> {
+  return serveImageAsset(env, id, request, "poster", "no_poster");
 }
 
-async function backdropAsset(env: Env, id: string): Promise<Response> {
-  return serveImageAsset(env, id, "backdrop", "no_backdrop");
+async function backdropAsset(env: Env, id: string, request: Request): Promise<Response> {
+  return serveImageAsset(env, id, request, "backdrop", "no_backdrop");
 }
 
 async function serveImageAsset(
   env: Env,
   id: string,
+  request: Request,
   kind: "poster" | "backdrop",
   notFoundError: string,
 ): Promise<Response> {
@@ -878,9 +902,15 @@ async function serveImageAsset(
     headers.set("cache-control", "public, max-age=300");
     return new Response(JSON.stringify({ error: notFoundError }), { status: 404, headers });
   }
+  const etag = `"${obj.etag}"`;
   const headers = new Headers(ASSET_CORS);
-  obj.writeHttpMetadata(headers);
+  headers.set("etag", etag);
   headers.set("cache-control", "public, max-age=604800, immutable");
+  const inm = request.headers.get("if-none-match");
+  if (inm && inm.split(",").map((s) => s.trim()).includes(etag)) {
+    return new Response(null, { status: 304, headers });
+  }
+  obj.writeHttpMetadata(headers);
   return new Response(obj.body, { headers });
 }
 
