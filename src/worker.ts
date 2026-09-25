@@ -365,9 +365,9 @@ export async function rematch(env: Env, id: string): Promise<Response> {
 
 export async function rematchAll(env: Env, limit = 500): Promise<Response> {
   const rows = await env.watch
-    .prepare("SELECT id, status FROM movie WHERE status != 'uploading' ORDER BY created_at ASC LIMIT ?")
+    .prepare("SELECT id FROM movie ORDER BY created_at ASC LIMIT ?")
     .bind(limit)
-    .all<{ id: string; status: string }>();
+    .all<{ id: string }>();
   const results: { id: string; ok: boolean; title?: string; overviewLen?: number; runtimeMin?: number | null; genres?: string[]; error?: string }[] = [];
   for (const row of rows.results) {
     try {
