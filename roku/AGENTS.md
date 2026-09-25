@@ -83,12 +83,17 @@ components/      # one .xml + .brs per SceneGraph component (isolated scopes)
 7. **Registry cache is size-guarded.** Values over ~12KB are skipped, not
    truncated, and expire after `CacheTtlSec()` (300s).
 
-## Worker env vars needed
+## Worker secrets needed (Secrets Store, account-level — no vars)
 
-| Var | Where | Description |
-|-----|-------|-------------|
-| `WATCH_PUBLIC_KEY` | Worker secret (dashboard) + Roku `.env` | Public key ID, must match |
-| `WATCH_PRIVATE_KEY` | Worker secret (dashboard) + Roku `.env` | Private secret, must match |
+| Secret | Store secret name | Description |
+|--------|-------------------|-------------|
+| `WATCH_PUBLIC_KEY` | `WATCH_PUBLIC_KEY` | Public key ID, must match Roku `.env` |
+| `WATCH_PRIVATE_KEY` | `WATCH_PRIVATE_KEY` | Private secret, must match Roku `.env` |
+
+Bound in `wrangler.jsonc` (`secrets_store_secrets`); read via `.get()` and
+cached per isolate, fail-closed on any error. `store_id` in `wrangler.jsonc`
+must be the account Secrets Store ID (not secret). After rotating a secret,
+redeploy so isolates drop the cached copy.
 | `ROKU_ALLOWED_DEVICES` | Worker secret (optional) | Comma-separated device UUID allowlist |
 
 Deploy worker with `ship worker=watch` (git-pushes origin/main). Set/rotate

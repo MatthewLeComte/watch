@@ -4,11 +4,16 @@ export interface Env {
   watch_bucket: R2Bucket;
   STREAM: StreamBinding;
   WATCH_KEY: string;
-  /** Public key ID for the Roku channel (identifies which key is used). */
-  WATCH_PUBLIC_KEY: string;
-  /** Private secret for the Roku channel (authenticates requests). */
-  WATCH_PRIVATE_KEY: string;
-  /** Comma-separated device UUIDs allowed. Empty = allow any device with valid API key. */
+  /** Secrets Store binding: public key ID for the Roku channel. */
+  WATCH_PUBLIC_KEY: StoreSecret;
+  /** Secrets Store binding: private secret for the Roku channel. */
+  WATCH_PRIVATE_KEY: StoreSecret;
+  /** Comma-separated device UUIDs allowed. Empty = allow any device with valid keypair. */
   ROKU_ALLOWED_DEVICES?: string;
   OPENSUBTITLES_API_KEY?: string;
+}
+
+/** Structural type for a Secrets Store secret binding (runtime provides .get()). */
+export interface StoreSecret {
+  get(): Promise<string>;
 }

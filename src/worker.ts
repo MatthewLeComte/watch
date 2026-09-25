@@ -53,7 +53,7 @@ export default {
       return json({ ok: true, name: "watch" });
     }
     if (path === "/v1/catalog" && request.method === "GET") {
-      if (!rokuAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
+      if (!(await rokuAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
       return rokuCatalog(env);
     }
     const pull = path.match(/^\/v1\/pull\/([0-9a-f-]{36})$/i);
@@ -69,7 +69,7 @@ export default {
     }
     const publicMedia = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/media$/i);
     if (publicMedia && (request.method === "GET" || request.method === "HEAD")) {
-      if (!rokuAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
+      if (!(await rokuAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
       return media(request, env, publicMedia[1]!);
     }
     if (path === "/mcp" || path === "/api/mcp") {
@@ -117,19 +117,37 @@ function authorized(request: Request, key: string): boolean {
   return n === 0;
 }
 
-/** Validate Roku app request: public key ID + private secret + device ID. */
-function rokuAuthorized(request: Request, env: Env): boolean {
-  const pub = env.WATCH_PUBLIC_KEY || "";
-  const priv = env.WATCH_PRIVATE_KEY || "";
-  if (!pub || !priv) return false;
+/** Validate Roku app request: public key ID + private secret + device ID.
+ * Secrets come from Secrets Store (cached per isolate); any failure denies. */
+async function rokuAuthorized(request: Request, env: Env): Promise<boolean> {
+  const secrets = await rokuSecrets(env);
+  if (!secrets) return false;
   const keyId = request.headers.get("x-key-id") || "";
   const apiKey = request.headers.get("x-api-key") || "";
   const deviceId = request.headers.get("x-device-id") || "";
   if (!deviceId) return false;
-  if (!constantTimeEqual(keyId, pub) || !constantTimeEqual(apiKey, priv)) return false;
+  if (!constantTimeEqual(keyId, secrets.pub) || !constantTimeEqual(apiKey, secrets.priv)) return false;
   const allowed = (env.ROKU_ALLOWED_DEVICES || "").split(",").map((s) => s.trim()).filter(Boolean);
   if (allowed.length > 0 && !allowed.includes(deviceId)) return false;
   return true;
+}
+
+type RokuSecrets = { pub: string; priv: string };
+let rokuSecretsCache: RokuSecrets | null = null;
+
+async function rokuSecrets(env: Env): Promise<RokuSecrets | null> {
+  if (rokuSecretsCache) return rokuSecretsCache;
+  try {
+    const getPub = env.WATCH_PUBLIC_KEY?.get?.();
+    const getPriv = env.WATCH_PRIVATE_KEY?.get?.();
+    if (!getPub || !getPriv) return null;
+    const [pub, priv] = await Promise.all([getPub, getPriv]);
+    if (!pub || !priv) return null;
+    rokuSecretsCache = { pub, priv };
+    return rokuSecretsCache;
+  } catch {
+    return null;
+  }
 }
 
 function constantTimeEqual(a: string, b: string): boolean {

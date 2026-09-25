@@ -18,6 +18,18 @@
     "WATCH_KEY": "a68596aee3429a00eea168ccc408af7f00235119bfce7e07152f92013cecc164"
   },
   "stream": { "binding": "STREAM" },
+  "secrets_store_secrets": [
+    {
+      "binding": "WATCH_PUBLIC_KEY",
+      "secret_name": "WATCH_PUBLIC_KEY",
+      "store_id": "REPLACE_WITH_SECRETS_STORE_ID"
+    },
+    {
+      "binding": "WATCH_PRIVATE_KEY",
+      "secret_name": "WATCH_PRIVATE_KEY",
+      "store_id": "REPLACE_WITH_SECRETS_STORE_ID"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "watch",
