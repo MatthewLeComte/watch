@@ -29,3 +29,4 @@ App icon is Eden pixel1, label `Watch`. Generator: `Work/Tooling/generate-wordma
 | App UI | `App/UI/` |
 | Playback and offline file | `App/Playback/`, `App/Model/MediaStore.swift` |
 | Xcode project | `App/project.yml` then `xcodegen generate` |
+| Roku channel | `roku/` (see `roku/AGENTS.md`) |

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="PlayerView" extends="Group">
+  <interface>
+    <field id="mediaUrl" type="string" />
+    <field id="startIndex" type="integer" />
+    <field id="stopIndex" type="integer" />
+    <field id="finishedIndex" type="integer" />
+  </interface>
+  <children>
+    <Rectangle width="1920" height="1080" color="0x000000FF" />
+    <Video
+      id="player"
+      width="1920"
+      height="1080"
+      visible="false"
+      />
+    <Rectangle
+      id="loading"
+      width="1920"
+      height="1080"
+      color="0x000000FF"
+      >
+      <Label
+        translation="[860, 520]"
+        font="font:MediumSystemFont"
+        text="Loading video..."
+        color="0xFFFFFFFF"
+        />
+    </Rectangle>
+    <Rectangle
+      id="errorBox"
+      width="1920"
+      height="1080"
+      color="0x000000FF"
+      visible="false"
+      >
+      <Label
+        id="errorLabel"
+        translation="[460, 500]"
+        width="1000"
+        font="font:MediumSystemFont"
+        text=""
+        color="0xFFFFFFFF"
+        horizAlign="center"
+        wrap="true"
+        />
+    </Rectangle>
+  </children>
+  <script type="text/brightscript" uri="pkg:/source/Config.brs" />
+  <script type="text/brightscript" uri="pkg:/source/Auth.brs" />
+  <script type="text/brightscript" uri="pkg:/components/PlayerView.brs" />
+</component>

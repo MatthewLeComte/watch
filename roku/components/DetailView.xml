@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="DetailView" extends="Group">
+  <interface>
+    <field id="itemContent" type="node" />
+    <field id="playIndex" type="integer" />
+    <field id="closeIndex" type="integer" />
+  </interface>
+  <children>
+    <Rectangle width="1920" height="1080" color="0x000000E0" />
+    <Poster
+      id="backdrop"
+      translation="[0, 0]"
+      width="1920"
+      height="1080"
+      loadDisplayMode="scaleToFill"
+      opacity="0.3"
+      />
+    <Rectangle
+      translation="[200, 200]"
+      width="1520"
+      height="680"
+      color="0x1A1A2EFF"
+      >
+      <Poster
+        id="poster"
+        translation="[40, 40]"
+        width="280"
+        height="420"
+        loadDisplayMode="scaleToFit"
+        />
+      <Label
+        id="title"
+        translation="[360, 40]"
+        width="1100"
+        font="font:LargeBoldSystemFont"
+        text=""
+        color="0xFFFFFFFF"
+        wrap="true"
+        />
+      <Label
+        id="year"
+        translation="[360, 110]"
+        font="font:MediumSystemFont"
+        text=""
+        color="0xAAAAAAFF"
+        />
+      <Label
+        id="overview"
+        translation="[360, 160]"
+        width="1100"
+        height="280"
+        font="font:MediumSystemFont"
+        text=""
+        color="0xCCCCCCFF"
+        wrap="true"
+        />
+      <Label
+        id="meta"
+        translation="[360, 460]"
+        width="1100"
+        font="font:SmallSystemFont"
+        text=""
+        color="0x888888FF"
+        wrap="true"
+        />
+      <Button
+        id="playBtn"
+        translation="[360, 560]"
+        width="200"
+        height="50"
+        text="Play"
+        />
+      <Button
+        id="closeBtn"
+        translation="[580, 560]"
+        width="120"
+        height="50"
+        text="Close"
+        />
+    </Rectangle>
+  </children>
+  <script type="text/brightscript" uri="pkg:/source/Config.brs" />
+  <script type="text/brightscript" uri="pkg:/components/DetailView.brs" />
+</component>

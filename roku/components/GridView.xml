@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="GridView" extends="Group">
+  <interface>
+    <field id="selectedItem" type="node" />
+    <field id="selectIndex" type="integer" />
+    <field id="reloadIndex" type="integer" />
+    <field id="hasError" type="bool" />
+  </interface>
+  <children>
+    <Rectangle width="1920" height="1080" color="0x0E0E10FF" />
+    <PosterGrid
+      id="grid"
+      translation="[120, 140]"
+      basePosterSize="[280, 420]"
+      itemSpacing="[24, 24]"
+      numColumns="5"
+      numRows="2"
+      />
+    <Rectangle
+      id="loading"
+      width="1920"
+      height="1080"
+      color="0x0E0E10FF"
+      >
+      <Label
+        translation="[860, 520]"
+        font="font:MediumSystemFont"
+        text="Loading..."
+        color="0xFFFFFFFF"
+        />
+    </Rectangle>
+    <Rectangle
+      id="errorBox"
+      width="1920"
+      height="1080"
+      color="0x0E0E10FF"
+      visible="false"
+      >
+      <Label
+        id="errorLabel"
+        translation="[460, 480]"
+        width="1000"
+        font="font:MediumSystemFont"
+        text=""
+        color="0xFFFFFFFF"
+        horizAlign="center"
+        wrap="true"
+        />
+      <Button
+        id="retryBtn"
+        translation="[800, 620]"
+        width="320"
+        height="60"
+        text="Retry"
+        />
+    </Rectangle>
+  </children>
+  <script type="text/brightscript" uri="pkg:/source/Config.brs" />
+  <script type="text/brightscript" uri="pkg:/source/Auth.brs" />
+  <script type="text/brightscript" uri="pkg:/components/GridView.brs" />
+</component>

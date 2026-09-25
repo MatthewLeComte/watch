@@ -53,19 +53,23 @@ export default {
       return json({ ok: true, name: "watch" });
     }
     if (path === "/v1/catalog" && request.method === "GET") {
-      if (!authorized(request, env.WATCH_KEY || "")) return json({ error: "unauthorized" }, 401);
-      return publicCatalog(env);
+      if (!rokuAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
+      return rokuCatalog(env);
     }
     const pull = path.match(/^\/v1\/pull\/([0-9a-f-]{36})$/i);
     if (pull && (request.method === "GET" || request.method === "HEAD")) return pullForStream(env, pull[1]!, request);
     const asset = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/(poster|backdrop)$/i);
     if (asset && (request.method === "GET" || request.method === "HEAD")) {
+      // Public by design: Roku Poster nodes cannot send auth headers, so
+      // images stay ungated. URLs are unguessable UUIDs; catalog and media
+      // (the expensive endpoints) are gated above and below.
       const id = asset[1]!;
       const kind = asset[2]!.toLowerCase();
       return kind === "poster" ? posterAsset(env, id) : backdropAsset(env, id);
     }
     const publicMedia = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/media$/i);
     if (publicMedia && (request.method === "GET" || request.method === "HEAD")) {
+      if (!rokuAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
       return media(request, env, publicMedia[1]!);
     }
     if (path === "/mcp" || path === "/api/mcp") {
@@ -110,6 +114,28 @@ function authorized(request: Request, key: string): boolean {
   if (got.length !== key.length) return false;
   let n = 0;
   for (let i = 0; i < got.length; i++) n |= got.charCodeAt(i) ^ key.charCodeAt(i);
+  return n === 0;
+}
+
+/** Validate Roku app request: public key ID + private secret + device ID. */
+function rokuAuthorized(request: Request, env: Env): boolean {
+  const pub = env.WATCH_PUBLIC_KEY || "";
+  const priv = env.WATCH_PRIVATE_KEY || "";
+  if (!pub || !priv) return false;
+  const keyId = request.headers.get("x-key-id") || "";
+  const apiKey = request.headers.get("x-api-key") || "";
+  const deviceId = request.headers.get("x-device-id") || "";
+  if (!deviceId) return false;
+  if (!constantTimeEqual(keyId, pub) || !constantTimeEqual(apiKey, priv)) return false;
+  const allowed = (env.ROKU_ALLOWED_DEVICES || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (allowed.length > 0 && !allowed.includes(deviceId)) return false;
+  return true;
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let n = 0;
+  for (let i = 0; i < a.length; i++) n |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return n === 0;
 }
 
@@ -588,12 +614,13 @@ async function media(request: Request, env: Env, id: string): Promise<Response> 
   return json({ error: "use_playback", hls: true }, 409);
 }
 
-async function publicCatalog(env: Env): Promise<Response> {
+async function rokuCatalog(env: Env): Promise<Response> {
   const res = await listItems(env);
   const body = await res.text();
   const headers = new Headers(ASSET_CORS);
   headers.set("content-type", "application/json");
-  headers.set("cache-control", "public, max-age=60");
+  // private: this endpoint requires auth, so shared caches must not store it.
+  headers.set("cache-control", "private, max-age=60");
   return new Response(body, { status: 200, headers });
 }
 
