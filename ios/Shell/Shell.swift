@@ -6,7 +6,7 @@ struct Shell: App {
 
     var body: some Scene {
         WindowGroup {
-            UI.ui_root()
+            LibraryView()
                 .environment(library)
                 .preferredColorScheme(.dark)
                 .task { await library.boot() }

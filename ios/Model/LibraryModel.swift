@@ -200,8 +200,6 @@ final class LibraryModel {
             let data = try Data(contentsOf: url)
             let type = url.pathExtension.lowercased() == "png" ? "image/png" : "image/jpeg"
             try await api.putPoster(id: movie.id, data: data, contentType: type)
-            let folder = FileManager.default.temporaryDirectory
-            _ = folder
             try? await media.removePoster(id: movie.id)
             _ = await media.posterFile(api: api, id: movie.id)
         } catch {

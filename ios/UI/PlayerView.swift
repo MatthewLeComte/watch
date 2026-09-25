@@ -16,6 +16,8 @@ final class DismissablePlayerVC: AVPlayerViewController {
 
 struct FullScreenPlayer: ViewModifier {
     @Binding var movie: Movie?
+    /// Surfaced when the movie fails to start (bad key, offline, bad media).
+    var onError: (String) -> Void = { _ in }
     @Environment(LibraryModel.self) private var library
     @State private var model: PlayerModel?
     @State private var presented: DismissablePlayerVC?
@@ -31,14 +33,29 @@ struct FullScreenPlayer: ViewModifier {
             let mdl = PlayerModel(movie: m, api: library.api, media: library.media) { seconds in
                 library.remember(position: seconds, for: m.id)
             }
+            mdl.onError = { msg in
+                if let vc = presented {
+                    presented = nil
+                    vc.dismiss(animated: true)
+                }
+                mdl.stop()
+                if model === mdl { model = nil }
+                movie = nil
+                onError(msg)
+            }
             model = mdl
             Task {
                 await mdl.start(position: library.positions[m.id] ?? 0)
+                if mdl.errorText != nil { return }
                 guard let player = mdl.player, movie?.id == m.id else {
                     await MainActor.run {
-                        mdl.stop()
-                        if movie?.id == m.id { movie = nil }
-                        if model === mdl { model = nil }
+                        mdl.fail("Couldn't play this movie.")
+                    }
+                    return
+                }
+                guard let top = topVC() else {
+                    await MainActor.run {
+                        mdl.fail("Couldn't open the player.")
                     }
                     return
                 }
@@ -54,7 +71,7 @@ struct FullScreenPlayer: ViewModifier {
                     movie = nil
                 }
                 presented = vc
-                topVC()?.present(vc, animated: true)
+                top.present(vc, animated: true)
             }
         } else {
             if let vc = presented {
