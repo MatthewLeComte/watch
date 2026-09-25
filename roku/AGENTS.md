@@ -1,55 +1,45 @@
 # Roku
 
-Checkout: `/Users/matthew/Developer/GitHub/roku`  
-GitHub: `MatthewLeComte/roku`  
-Channel: `Watch` (private, sideloaded)
+Checkout: `/Users/matthew/Developer/GitHub/watch/roku`
+Channel: `Watch` (private, sideloaded to 10.0.0.115)
 
-Target: Roku TV, SceneGraph, FHD (`ui_resolutions=fhd`). No HLS, no subtitles, no auth — direct MP4 from the `watch` worker. Built for the home network; do not expose to the public internet without a real auth layer on the worker.
+Target: Roku TV, SceneGraph, FHD. Direct MP4 from the `watch` worker.
+Single `MainScene`: grid + player, manual back handling. Main thread fetches
+the catalog and hands it to the scene via the `WatchCache` registry section
+(chunked keys `catalog0..N` + `catalogChunks`, registry values are
+size-limited). Scene reads keypair + device ID from the same section.
 
-## Build
+## Build + install
 
-Roku apps are a zipped directory. No build step, no npm.
-
-```
-cd /Users/matthew/Developer/GitHub/roku
-zip -r app.zip manifest source components -x "*.DS_Store"
-```
-
-Sideload into Developer Mode (Settings → System → Advanced system settings → Developer settings on the device):
-
-```
-curl -F "archive=@app.zip" http://<roku-ip>/plugin_install
+```bash
+cd /Users/matthew/Developer/GitHub/watch/roku
+cp .env.example .env   # fill in values (see below)
+./build.sh             # creates app.zip, keypair injected from .env
+./build.sh --install   # build + sideload + verify installed version
 ```
 
-## Data sources
+`.env` / `app.zip` are gitignored — secrets never touch git.
 
-All four are public on the `watch` worker (no `WATCH_KEY` required).
+## Sideload
 
-| Endpoint | Use |
-|----------|-----|
-| `GET /v1/catalog` | JSON list of all items, CORS, `Cache-Control: 60s` |
-| `GET /v1/items/{id}/media` | MP4 with `Accept-Ranges: bytes` for seek |
-| `GET /v1/items/{id}/poster` | 2:3 portrait, JPEG/WebP, CORS, immutable |
-| `GET /v1/items/{id}/backdrop` | 16:9 landscape, JPEG/WebP, CORS, immutable |
+Needs Developer Mode on the Roku (Settings → System → Advanced system
+settings → Developer settings). The installer user is `rokudev` with the
+Developer Mode password:
 
-See `watch/POSTERS.md` for the image contract and validation rules.
+- `ROKU_HOST` — Roku IP (10.0.0.115 = Streaming Stick 4K)
+- `ROKU_DEV_USER` — `rokudev`
+- `ROKU_DEV_PASSWORD` — Developer Mode password
 
-## Where to edit
+`--install` POSTs with digest auth + `mysubmit=Install`, then checks the
+installed version from `:8060/query/apps` matches the manifest.
 
-| Task | Open |
-|------|------|
-| Entry, screen lifecycle | `source/Main.brs` |
-| Grid + detail + player (single scene) | `components/MainScene.xml`, `source/MainScene.brs` |
-| Grid item | `components/GridItem.xml`, `source/GridItem.brs` |
-| Catalog fetch | `source/Catalog.brs` |
+## Auth (worker gate)
 
-The app uses a single `MainScene` with three view groups (`grid`, `detail`, `player`) and a manual back stack. Detail and player swap in on selection, back key pops the stack.
+Catalog + media require all three headers; posters stay public (Roku
+`Poster` nodes can't send headers; URLs are unguessable UUIDs).
 
-## Out of scope for v1
-
-- Resume / watched-state tracking.
-- HLS / adaptive bitrate.
-- Subtitle tracks.
-- Auth on the catalog or media endpoints.
-- Channel icon and splash screen branding.
-- Player controls overlay (uses the default `Video` overlay).
+- `X-Key-ID` / `X-API-Key` = `WATCH_PUBLIC_KEY` / `WATCH_PRIVATE_KEY`
+  (account Secrets Store on the worker, `.env` + build injection here)
+- `X-Device-ID` = per-device UUID (`roDeviceInfo.GetRandomUUID()`, stored
+  in registry, written before the scene starts so it can build player
+  `httpHeaders` from the same section)
