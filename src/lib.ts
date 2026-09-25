@@ -51,7 +51,9 @@ export function parseReleaseName(filename: string): ParsedName {
     if (imdb && t === imdb) continue;
     kept.push(raw);
   }
-  let title = kept.join(" ").replace(/\s+-\s*[A-Za-z0-9]+$/, "").trim();
+  // Strip release-group suffix only when it's an all-caps token (YIFY, GROUP, ETRG…).
+  // A bare \s+-\s*[A-Za-z0-9]+$ would also eat " - World" from "Captain America - Brave New World".
+  let title = kept.join(" ").replace(/\s+-\s*[A-Z][A-Z0-9]{1,}$/, "").trim();
   if (isAllCaps(title)) title = titleCase(title);
   if (!title) title = noExt;
   return { title, year, imdbId: imdb };

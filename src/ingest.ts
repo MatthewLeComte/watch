@@ -224,20 +224,61 @@ async function resolveImdbId(
 ): Promise<string | null> {
   if (filenameId && /^tt\d{7,8}$/.test(filenameId)) return filenameId.toLowerCase();
   if (!title) return null;
-  const q = year ? `${title} ${year}` : title;
+  // Search the bare title. Adding a year as a token confuses Cinemeta when the
+  // filename doesn't actually carry one ("Joseph King of Dreams" with no year).
   try {
-    const hits = await cinemetaSearch(q);
+    const hits = await cinemetaSearch(title);
     if (!hits.length) return null;
-    // When the filename has a year, pick the hit whose year matches.
     if (year) {
       const byYear = hits.find((h) => h.year === String(year));
       if (byYear) return byYear.id;
     }
-    // No year, or no year match: first hit, sorted by Cinemeta relevance.
-    return hits[0]!.id;
+    // No year, or no year match: pick the hit where the query's words appear
+    // in the same order in the candidate title. "Joseph King of Dreams" should
+    // beat "King of Dreams" because the first query word starts the candidate.
+    const scored = hits
+      .map((h) => ({ h, score: scoreTitle(title, h.name) }))
+      .sort((a, b) => b.score - a.score);
+    return scored[0]?.h.id ?? null;
   } catch {
     return null;
   }
+}
+
+/** Score a Cinemeta hit against a parsed title. Higher = better match.
+ *  - +100 if the candidate title starts with the first query word
+ *  - +50  if the full query appears as a contiguous substring of the candidate
+ *  - +10  for every query word found in the candidate, in order
+ *  - -50  if a query word is missing from the candidate entirely
+ *  - -5   per extra word in the candidate beyond the query
+ *  Short tokens (the, a, 2, e) are kept so "Patlabor 2" and "Titan A.E."
+ *  can still discriminate against "Patlabor" and "Titanic". */
+function scoreTitle(query: string, candidate: string): number {
+  const q = norm(query);
+  const c = norm(candidate);
+  if (!q || !c) return 0;
+  const qWords = q.split(" ").filter((w) => w.length > 0);
+  const cWords = c.split(" ");
+  if (!qWords.length) return 0;
+  let score = 0;
+  if (cWords[0] === qWords[0]) score += 100;
+  if (c.includes(q)) score += 50;
+  let ci = 0;
+  for (const w of qWords) {
+    while (ci < cWords.length && cWords[ci] !== w) ci++;
+    if (ci >= cWords.length) score -= 50;
+    else { score += 10; ci++; }
+  }
+  if (cWords.length > qWords.length) score -= 5 * (cWords.length - qWords.length);
+  return score;
+}
+
+function norm(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/['\u2018\u2019']/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 async function loadCached(env: Env, imdbId: string): Promise<CachedWinner | null> {
