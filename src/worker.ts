@@ -84,7 +84,12 @@ export default {
     if (publicTrailer && (request.method === "GET" || request.method === "HEAD")) {
       const ok = (await rokuAuthorized(request, env)) || authorized(request, env.WATCH_KEY || "");
       if (!ok) return json({ error: "unauthorized" }, 401);
-      return trailerFile(request, env, publicTrailer[1]!);
+      try {
+        return await trailerFile(request, env, publicTrailer[1]!);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "failed";
+        return json({ error: message }, 500);
+      }
     }
     if (path === "/mcp" || path === "/api/mcp") {
       if (!authorized(request, env.WATCH_KEY || "")) return json({ ok: false, error: "unauthorized" }, 401);
