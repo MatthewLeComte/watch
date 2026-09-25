@@ -52,7 +52,10 @@ export default {
     if (request.method === "GET" && (path === "/" || path === "/health" || path === "/v1/health")) {
       return json({ ok: true, name: "watch" });
     }
-    if (path === "/v1/catalog" && request.method === "GET") return publicCatalog(env);
+    if (path === "/v1/catalog" && request.method === "GET") {
+      if (!authorized(request, env.WATCH_KEY || "")) return json({ error: "unauthorized" }, 401);
+      return publicCatalog(env);
+    }
     const pull = path.match(/^\/v1\/pull\/([0-9a-f-]{36})$/i);
     if (pull && (request.method === "GET" || request.method === "HEAD")) return pullForStream(env, pull[1]!, request);
     const asset = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/(poster|backdrop)$/i);
