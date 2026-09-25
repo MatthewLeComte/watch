@@ -8,480 +8,165 @@ struct LibraryView: View {
     @State private var pendingImport: URL?
     @State private var pendingScoped = false
     @State private var bulkSheetPresented = false
-    @State private var muted = true
-    @State private var featuredID: String?
-    @State private var videoAspect: CGFloat = 16.0 / 9.0
     @State private var posters: [String: URL] = [:]
     @State private var playing: Movie?
+
+    private let posterWidth: CGFloat = 140
+    private let posterHeight: CGFloat = 210
 
     var body: some View {
         NavigationStack {
             ZStack(alignment: .top) {
                 Color.black.ignoresSafeArea()
-                if library.movies.isEmpty {
-                    empty
-                } else {
-                    home
-                }
+                if library.movies.isEmpty { empty } else { home }
                 controls
             }
-            .onDrop(of: [.movie, .mpeg4Movie, .quickTimeMovie], isTargeted: nil) { providers in
-                acceptDrop(providers)
-            }
             .toolbar { }
-            .navigationDestination(for: Movie.self) { movie in
-                DetailView(movieID: movie.id)
-            }
-            .sheet(item: $correcting) { movie in
-                CorrectMatchView(movie: movie)
-            }
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.mpeg4Movie, .quickTimeMovie, .movie], allowsMultipleSelection: true) { result in
-                guard case .success(let urls) = result else { return }
-                var items: [(URL, Bool)] = []
-                for url in urls {
-                    let ext = url.pathExtension.lowercased()
-                    guard ["mp4", "m4v", "mov"].contains(ext) else { continue }
-                    let scoped = url.startAccessingSecurityScopedResource()
-                    items.append((url, scoped))
-                }
-                guard !items.isEmpty else { return }
-                if items.count == 1, let only = items.first {
-                    pendingImport = nil
-                    pendingScoped = only.1
-                    pendingImport = only.0
-                } else {
-                    pendingImport = nil
-                    library.importBulk(items)
-                }
-            }
-            .overlay {
-                // Full-page import on every screen. fullScreenCover is iOS-only;
-                // an overlay is the same code everywhere and can't be swiped
-                // into an orphaned import.
-                if let url = pendingImport {
-                    ImportView(url: url, scoped: pendingScoped) {
-                        pendingImport = nil
-                    }
-                }
-            }
-            .sheet(isPresented: $bulkSheetPresented) {
-                BulkImportView(onClose: {
-                    if library.bulkAllFinished { library.clearFinishedBulk() }
-                    bulkSheetPresented = false
-                })
-            }
-            .onChange(of: library.bulkItems.count) { _, c in
-                if c > 0 && !bulkSheetPresented { bulkSheetPresented = true }
-            }
-            .modifier(PlayerCover(isPresented: Binding(
-                get: { playing != nil },
-                set: { if !$0 { playing = nil } }
-            )) {
-                if let playing { PlayerView(movie: playing, onClose: { self.playing = nil }) }
-            })
+            .navigationDestination(for: Movie.self) { DetailView(movieID: $0.id) }
+            .sheet(item: $correcting) { CorrectMatchView(movie: $0) }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.mpeg4Movie, .quickTimeMovie, .movie], allowsMultipleSelection: true) { handleImport($0) }
+            .overlay { if let url = pendingImport { ImportView(url: url, scoped: pendingScoped) { pendingImport = nil } } }
+            .sheet(isPresented: $bulkSheetPresented) { BulkImportView(onClose: { if library.bulkAllFinished { library.clearFinishedBulk() }; bulkSheetPresented = false }) }
+            .onChange(of: library.bulkItems.count) { _, c in if c > 0 { bulkSheetPresented = true } }
+            .modifier(PlayerCover(isPresented: Binding(get: { playing != nil }, set: { if !$0 { playing = nil } })) { if let p = playing { PlayerView(movie: p, onClose: { playing = nil }) } })
             .refreshable { await library.refresh(); await loadPosters() }
-            .onChange(of: library.openImport) {
-                if let url = library.openImport {
-                    pendingScoped = library.openImportScoped
-                    pendingImport = url
-                    library.openImport = nil
-                }
-            }
-            .task {
-                if featuredID == nil { featuredID = library.movies.first?.id }
-                await loadPosters()
-            }
+            .onChange(of: library.openImport) { if let url = library.openImport { pendingImport = url; pendingScoped = library.openImportScoped; library.openImport = nil } }
+            .task { await loadPosters() }
         }
     }
 
     private var shelves: [Shelf] {
-        var rows: [Shelf] = []
-        let continuing = library.movies.filter { (library.positions[$0.id] ?? 0) > 30 }
-        if !continuing.isEmpty {
-            rows.append(Shelf(id: "continue", title: "Continue Watching", movies: continuing))
-        }
-        let saved = library.movies.filter { (library.fractions[$0.id] ?? 0) >= 0.999 }
-        if !saved.isEmpty {
-            rows.append(Shelf(id: "device", title: "Downloads", movies: saved))
-        }
-        var byGenre: [String: [Movie]] = [:]
-        var loose: [Movie] = []
-        for movie in library.movies {
-            if movie.genres.isEmpty { loose.append(movie) }
-            else {
-                for genre in movie.genres { byGenre[genre, default: []].append(movie) }
-            }
-        }
-        for genre in byGenre.keys.sorted() {
-            rows.append(Shelf(id: "genre-\(genre)", title: genre, movies: byGenre[genre] ?? []))
-        }
-        if !loose.isEmpty {
-            rows.append(Shelf(id: "movies", title: "Movies", movies: loose))
-        } else if rows.isEmpty, !library.movies.isEmpty {
-            rows.append(Shelf(id: "movies", title: "Movies", movies: library.movies))
-        }
-        return rows.filter { !$0.movies.isEmpty }
+        var r: [Shelf] = []
+        let c = library.movies.filter { (library.positions[$0.id] ?? 0) > 30 }
+        if !c.isEmpty { r.append(Shelf(id: "continue", title: "Continue Watching", movies: c)) }
+        let s = library.movies.filter { (library.fractions[$0.id] ?? 0) >= 0.999 }
+        if !s.isEmpty { r.append(Shelf(id: "device", title: "On This Device", movies: s)) }
+        var bg: [String: [Movie]] = [:], loose: [Movie] = []
+        for m in library.movies { if m.genres.isEmpty { loose.append(m) } else { for g in m.genres { bg[g, default: []].append(m) } } }
+        for g in bg.keys.sorted() { r.append(Shelf(id: "genre-\(g)", title: g, movies: bg[g]!)) }
+        if !loose.isEmpty { r.append(Shelf(id: "movies", title: "All Movies", movies: loose)) }
+        else if r.isEmpty, !library.movies.isEmpty { r.append(Shelf(id: "movies", title: "All Movies", movies: library.movies)) }
+        return r.filter { !$0.movies.isEmpty }
     }
 
-    private var featured: Movie? {
-        library.movies.first { $0.id == featuredID } ?? library.movies.first
-    }
+    private var heroMovie: Movie? { library.movies.first }
 
     private var home: some View {
-        GeometryReader { geo in
-            let aspect = max(videoAspect, 1.3)
-            let ideal = geo.size.width / aspect
-            let rowReserve = min(max(300, geo.size.height * 0.42), geo.size.height * 0.62)
-            let hero = min(max(ideal, 200), max(200, geo.size.height - rowReserve))
-            let rowBand = max(0, geo.size.height - hero)
-            VStack(spacing: 0) {
-                featuredCarousel(width: geo.size.width, height: hero)
-                    .frame(width: geo.size.width, height: hero)
-                rowPager(width: geo.size.width, height: rowBand)
-                    .frame(width: geo.size.width, height: rowBand)
-            }
-            .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
-            .animation(.smooth(duration: 0.35), value: hero)
-        }
-    }
-
-    /// Featured shelf plays real trailers (YouTube key or trailer file),
-    /// muted and looped — never the full movie. Tap toggles mute.
-    /// Play, edit, and delete live on the context menu.
-    private func featuredCarousel(width: CGFloat, height: CGFloat) -> some View {
-        ScrollView(.horizontal) {
-            LazyHStack(spacing: 0) {
-                ForEach(library.movies) { movie in
-                    ZStack {
-                        Color.black
-                        if Trailer.key(for: movie) != nil || Trailer.fileURL(for: movie) != nil {
-                            TrailerPlayer(
-                                key: Trailer.key(for: movie),
-                                mp4: Trailer.fileURL(for: movie),
-                                muted: muted
-                            )
-                        } else {
-                            PosterImage(url: posters[movie.id] ?? URL(string: movie.thumbnailUrl ?? ""), title: movie.displayTitle)
-                        }
-                    }
-                    .frame(width: width, height: height)
-                    .id(movie.id)
-                    .contentShape(Rectangle())
-                    .onTapGesture { muted.toggle() }
-                    .contextMenu { posterMenu(movie) }
-                }
-            }
-            .scrollTargetLayout()
-        }
-        .scrollTargetBehavior(.paging)
-        .scrollPosition(id: $featuredID)
-        .scrollIndicators(.hidden)
-        .overlay(alignment: .bottom) {
-            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                .frame(height: 64)
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if featured != nil {
-                Button {
-                    muted.toggle()
-                } label: {
-                    Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.75), radius: 4, y: 1)
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(muted ? "Unmute" : "Mute")
-                .padding(.trailing, 14)
-                .padding(.bottom, 28)
-            }
-        }
-        .clipped()
-    }
-
-    private func rowPager(width: CGFloat, height: CGFloat) -> some View {
-        ScrollView(.vertical) {
+        ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 0) {
-                if !library.pending.isEmpty {
-                    importingRow(width: width, height: height)
-                        .containerRelativeFrame(.vertical)
-                        .id("importing")
-                }
-                ForEach(shelves) { shelf in
-                    rowPage(shelf, width: width, height: height)
-                        .containerRelativeFrame(.vertical)
-                        .id(shelf.id)
-                }
+                trailerHero
+                ForEach(shelves) { shelfRow($0) }
             }
-            .scrollTargetLayout()
         }
-        .scrollTargetBehavior(.paging)
-        .scrollIndicators(.hidden)
     }
 
-    private func rowPage(_ shelf: Shelf, width: CGFloat, height: CGFloat) -> some View {
-        let showsDetails = shelf.id == shelves.first?.id
-        let reserved: CGFloat = showsDetails ? 132 : 44
-        let cardH = min(250, max(132, height - reserved - 24))
-        let card = min(cardH / 1.5, max(96, width * 0.18))
-        return VStack(alignment: .leading, spacing: 10) {
-            if let featured, showsDetails {
-                Text(featured.displayTitle)
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        withAnimation(.smooth(duration: 0.35)) { playing = featured }
-                    }
-                    .contextMenu { posterMenu(featured) }
-                HStack(spacing: 8) {
-                    if !featured.yearText.isEmpty { Text(featured.yearText) }
-                    if let runtime = featured.runtimeText { Text(runtime) }
-                }
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.white.opacity(0.7))
-                if !featured.overview.isEmpty {
-                    Text(featured.overview)
-                        .font(.callout)
-                        .foregroundStyle(.white.opacity(0.85))
-                        .lineLimit(2)
-                }
+    private var trailerHero: some View {
+        ZStack {
+            Color.black
+            // Single player rule: trailer unmounts the moment the movie player opens.
+            if playing == nil, let movie = heroMovie, let url = Trailer.url(for: movie) {
+                TrailerView(url: url)
+                    .id(url.absoluteString)
+                    .allowsHitTesting(false)
+            } else if let movie = heroMovie {
+                PosterImage(url: posters[movie.id] ?? URL(string: movie.thumbnailUrl ?? ""), title: movie.displayTitle)
             }
-            Text(shelf.title)
-                .font(.title3.weight(.bold))
+            if let movie = heroMovie {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Text(movie.displayTitle)
+                        .font(.system(size: 28, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    HStack(spacing: 12) {
+                        if !movie.yearText.isEmpty { Text(movie.yearText) }
+                        if let rt = movie.runtimeText { Text(rt) }
+                        if !movie.genres.isEmpty { Text(movie.genres.first!).foregroundStyle(Cinema.red) }
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.8))
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(LinearGradient(colors: [.clear, .black.opacity(0.7), .black], startPoint: .top, endPoint: .bottom).allowsHitTesting(false))
+            }
+        }
+        .frame(height: 380)
+        .clipped()
+        .contentShape(Rectangle())
+        .onTapGesture { if let movie = heroMovie { play(movie) } }
+    }
+
+    private func shelfRow(_ s: Shelf) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(s.title)
+                .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
+                .padding(.horizontal, 20)
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(shelf.movies) { movie in
-                        PosterImage(url: posters[movie.id] ?? URL(string: movie.thumbnailUrl ?? ""), title: movie.displayTitle)
-                            .frame(width: card, height: card * 1.5)
-                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                            .onTapGesture { playing = movie }
-                            .contextMenu { posterMenu(movie) }
+                LazyHStack(spacing: 14) {
+                    ForEach(s.movies) { m in
+                        PosterImage(url: posters[m.id] ?? URL(string: m.thumbnailUrl ?? ""), title: m.displayTitle)
+                            .frame(width: posterWidth, height: posterHeight)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .onTapGesture { play(m) }
+                            .contextMenu { posterMenu(m) }
                     }
                 }
+                .padding(.horizontal, 20)
             }
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.black)
+        .padding(.vertical, 10)
     }
 
-    /// Not-ready-yet posters with live transcode/upload progress,
-    /// pinned above the shelves while imports run.
-    private func importingRow(width: CGFloat, height: CGFloat) -> some View {
-        let cardH = min(250, max(132, height - 44 - 24))
-        let card = min(cardH / 1.5, max(96, width * 0.18))
-        return VStack(alignment: .leading, spacing: 10) {
-            Text("Importing")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(library.pending) { item in
-                        VStack(alignment: .leading, spacing: 8) {
-                            ZStack {
-                                LinearGradient(colors: [Color(white: 0.16), .black], startPoint: .top, endPoint: .bottom)
-                                VStack(spacing: 6) {
-                                    Image(systemName: "film")
-                                        .font(.system(size: 30, weight: .medium))
-                                        .foregroundStyle(.white.opacity(0.85))
-                                    Text("NOT READY YET")
-                                        .font(.caption2.weight(.heavy))
-                                        .foregroundStyle(Cinema.red)
-                                    Text(item.stage.uppercased())
-                                        .font(.caption2.weight(.bold))
-                                        .foregroundStyle(.white)
-                                }
-                            }
-                            .frame(width: card, height: card * 1.5)
-                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                            .overlay(alignment: .bottom) {
-                                LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
-                                    .frame(height: 44)
-                            }
-                            Text(item.filename)
-                                .font(.caption)
-                                .foregroundStyle(.white.opacity(0.85))
-                                .lineLimit(1)
-                            ProgressView(value: item.progress)
-                                .tint(Cinema.red)
-                            Text("\(item.detail) — \(Int((item.progress * 100).rounded()))%")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.7))
-                                .lineLimit(1)
-                        }
-                        .frame(width: card)
-                    }
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 18)
-        .padding(.top, 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.black)
+    @ViewBuilder private func posterMenu(_ m: Movie) -> some View {
+        Button { play(m) } label: { Label("Play", systemImage: "play.fill") }
+        if (library.fractions[m.id] ?? 0) >= 0.999 { Button { Task { await library.removeLocal(m) } } label: { Label("Remove Download", systemImage: "trash") } }
+        else { Button { library.download(m) } label: { Label("Save to Device", systemImage: "arrow.down") } }
+        Button { correcting = m } label: { Label("Correct Match", systemImage: "pencil") }
+        Button { Task { await library.rematch(m) } } label: { Label("Rescan", systemImage: "arrow.clockwise") }
+        Button(role: .destructive) { Task { await library.delete(m) } } label: { Label("Delete", systemImage: "trash.fill") }
     }
 
-    /// Poster context menu: play, offline, match correction, rescan, delete.
-    /// Edit lives here — not in a hamburger menu.
-    @ViewBuilder
-    private func posterMenu(_ movie: Movie) -> some View {
-        Button {
-            withAnimation(.smooth(duration: 0.35)) { playing = movie }
-        } label: {
-            Label("Play", systemImage: "play.fill")
-        }
-        if (library.fractions[movie.id] ?? 0) >= 0.999 {
-            Button {
-                Task { await library.removeLocal(movie) }
-            } label: {
-                Label("Remove download", systemImage: "trash")
-            }
-        } else {
-            Button {
-                library.download(movie)
-            } label: {
-                Label("Save to this device", systemImage: "arrow.down")
-            }
-        }
-        Button {
-            correcting = movie
-        } label: {
-            Label("Correct a match", systemImage: "pencil")
-        }
-        Button {
-            Task { await library.rematch(movie) }
-        } label: {
-            Label("Rescan match", systemImage: "arrow.clockwise")
-        }
-        Button(role: .destructive) {
-            Task { await library.delete(movie) }
-        } label: {
-            Label("Delete", systemImage: "trash.fill")
-        }
-    }
-
-    private var featuredSelection: Binding<String> {
-        Binding(
-            get: { featured?.id ?? "" },
-            set: { id in
-                withAnimation(.smooth(duration: 0.45)) { featuredID = id }
-            }
-        )
-    }
-
-    /// No hamburger: one prominent glass Add button, top-trailing, 48pt.
-    /// Everything else lives on the posters (context menus) and shelves.
     private var controls: some View {
-        HStack {
-            Spacer()
-            Button { importing = true } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 48, height: 48)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
-            .accessibilityLabel("Add a movie")
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 6)
-    }
-
-    private func posterRow(_ shelf: Shelf, width: CGFloat) -> some View {
-        let card = min(160, max(108, width * 0.28))
-        return VStack(alignment: .leading, spacing: 10) {
-            Text(shelf.title)
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 18)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(shelf.movies) { movie in
-                        PosterImage(url: posters[movie.id] ?? URL(string: movie.thumbnailUrl ?? ""), title: movie.displayTitle)
-                            .frame(width: card, height: card * 1.5)
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                withAnimation(.smooth(duration: 0.35)) { playing = movie }
-                            }
-                            .contextMenu { posterMenu(movie) }
-                    }
-                }
-                .padding(.horizontal, 18)
-            }
-        }
-        .padding(.bottom, 22)
+        HStack { Spacer()
+            Button { importing = true } label: { Image(systemName: "plus").font(.system(size: 20, weight: .bold)).frame(width: 48, height: 48) }
+            .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Add a movie")
+        }.padding(.horizontal, 14).padding(.top, 6)
     }
 
     private var empty: some View {
         VStack(spacing: 18) {
-            Text("WATCH")
-                .font(.system(size: 42, weight: .black))
-                .tracking(2)
-                .foregroundStyle(Cinema.red)
-            Text("Nothing here yet")
-                .font(.title2.weight(.bold))
-                .foregroundStyle(.white)
-            Button { importing = true } label: {
-                Label("Add a movie", systemImage: "plus")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 12)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 4))
-            }
-            .buttonStyle(.plain)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
+            Text("WATCH").font(.system(size: 42, weight: .black)).tracking(2).foregroundStyle(Cinema.red)
+            Text("Nothing here yet").font(.title2.weight(.bold))
+            Button { importing = true } label: { Label("Add a movie", systemImage: "plus").font(.headline.weight(.bold)).padding(.horizontal, 22).padding(.vertical, 12).background(.white, in: RoundedRectangle(cornerRadius: 4)).foregroundStyle(.black) }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black)
     }
 
-    /// Drag-and-drop: drop movie files anywhere on the library to import.
-    /// Each file is sandboxed immediately, then routed to the import page.
-    private func acceptDrop(_ providers: [NSItemProvider]) -> Bool {
-        let movieIDs = [UTType.movie.identifier, UTType.mpeg4Movie.identifier, UTType.quickTimeMovie.identifier]
-        var accepted = false
-        for provider in providers {
-            guard let type = movieIDs.first(where: { provider.hasItemConformingToTypeIdentifier($0) }) else { continue }
-            accepted = true
-            provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
-                guard let url, error == nil else { return }
-                let dir = FileManager.default.temporaryDirectory.appendingPathComponent("watch-drop", isDirectory: true)
-                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                let dest = dir.appendingPathComponent(url.lastPathComponent)
-                try? FileManager.default.removeItem(at: dest)
-                do {
-                    try FileManager.default.copyItem(at: url, to: dest)
-                    Task { @MainActor in
-                        pendingScoped = false
-                        pendingImport = dest
-                    }
-                } catch { }
-            }
-        }
-        return accepted
+    private func handleImport(_ r: Result<[URL], Error>) {
+        guard case .success(let urls) = r else { return }
+        var items: [(URL, Bool)] = []
+        for u in urls { let ext = u.pathExtension.lowercased(); guard ["mp4","m4v","mov"].contains(ext) else { continue }; items.append((u, u.startAccessingSecurityScopedResource())) }
+        guard !items.isEmpty else { return }
+        if items.count == 1, let only = items.first { pendingImport = only.0; pendingScoped = only.1 }
+        else { library.importBulk(items) }
     }
 
     private func loadPosters() async {
-        for movie in library.movies where posters[movie.id] == nil {
-            if let url = await library.posterURL(for: movie.id) {
-                posters[movie.id] = url
+        await withTaskGroup(of: (String, URL?).self) { group in
+            for m in library.movies where posters[m.id] == nil {
+                group.addTask { (m.id, await library.posterURL(for: m.id)) }
             }
+            for await (id, url) in group { if let url { posters[id] = url } }
         }
     }
+
+    private func play(_ m: Movie) { withAnimation(.smooth(duration: 0.35)) { playing = m } }
 }
 
-private struct Shelf: Identifiable {
-    var id: String
-    var title: String
-    var movies: [Movie]
+private struct Shelf: Identifiable { let id: String; let title: String; let movies: [Movie] }
+
+extension Collection {
+    subscript(safe index: Index) -> Element? { indices.contains(index) ? self[index] : nil }
 }

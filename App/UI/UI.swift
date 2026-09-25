@@ -51,7 +51,11 @@ enum UI {
     /// 8. The inline trailer.
     @ViewBuilder
     static func ui_trailer(movie: Movie) -> some View {
-        TrailerPlayer(key: Trailer.key(for: movie), mp4: Trailer.fileURL(for: movie), muted: true)
+        if let url = Trailer.url(for: movie) {
+            TrailerView(url: url)
+        } else {
+            Color.black
+        }
     }
 
     /// 9. The settings screen.

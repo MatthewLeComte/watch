@@ -33,10 +33,6 @@ enum Logic {
     static func play(library: LibraryModel, id: String) async -> URL? {
         if let movie = library.movies.first(where: { $0.id == id }),
            let local = await library.media.playableFile(movie) { return local }
-        do {
-            let movie = try await library.api.playback(id: id)
-            if let hls = movie.hlsUrl, let url = URL(string: hls) { return url }
-        } catch {}
         return nil
     }
 

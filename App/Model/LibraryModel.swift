@@ -80,16 +80,21 @@ final class LibraryModel {
     }
 
     func refreshFractions() async {
-        var next: [String: Double] = [:]
-        for movie in movies {
-            next[movie.id] = await media.fraction(id: movie.id, byteSize: movie.byteSize)
+        await withTaskGroup(of: (String, Double).self) { group in
+            for movie in movies {
+                group.addTask { [self] in (movie.id, await media.fraction(id: movie.id, byteSize: movie.byteSize)) }
+            }
+            var next: [String: Double] = [:]
+            for await (id, frac) in group { next[id] = frac }
+            fractions = next
         }
-        fractions = next
     }
 
     func cachePosters() async {
-        for movie in movies {
-            _ = await media.posterFile(api: api, id: movie.id)
+        await withTaskGroup(of: Void.self) { group in
+            for movie in movies {
+                group.addTask { [self] in _ = await media.posterFile(api: api, id: movie.id) }
+            }
         }
     }
 
@@ -98,11 +103,18 @@ final class LibraryModel {
     }
 
     func remember(position: Double, for id: String) {
+        let old = positions[id] ?? 0
         positions[id] = position
+        // Persist at most every ~5s of playback — the tick fires 4x/sec and
+        // JSON-encoding UserDefaults on every tick stalls the main thread.
+        let now = Date().timeIntervalSince1970
+        guard abs(position - old) > 2 || now - lastPositionSave > 5 else { return }
+        lastPositionSave = now
         if let data = try? JSONEncoder().encode(positions) {
             defaults.set(data, forKey: "watch.positions")
         }
     }
+    private var lastPositionSave: Double = 0
 
     /// Called by the dedicated import page when its two-stage
     /// process→upload flow finishes. Inserts the movie + caches its poster.
