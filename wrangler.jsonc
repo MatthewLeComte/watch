@@ -22,12 +22,12 @@
     {
       "binding": "WATCH_PUBLIC_KEY",
       "secret_name": "WATCH_PUBLIC_KEY",
-      "store_id": "REPLACE_WITH_SECRETS_STORE_ID"
+      "store_id": "0837aceaf29e426aa377a4728cc6db7a"
     },
     {
       "binding": "WATCH_PRIVATE_KEY",
       "secret_name": "WATCH_PRIVATE_KEY",
-      "store_id": "REPLACE_WITH_SECRETS_STORE_ID"
+      "store_id": "0837aceaf29e426aa377a4728cc6db7a"
     }
   ],
   "d1_databases": [
