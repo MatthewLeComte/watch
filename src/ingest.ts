@@ -224,10 +224,17 @@ async function resolveImdbId(
 ): Promise<string | null> {
   if (filenameId && /^tt\d{7,8}$/.test(filenameId)) return filenameId.toLowerCase();
   if (!title) return null;
-  // Search the bare title. Adding a year as a token confuses Cinemeta when the
-  // filename doesn't actually carry one ("Joseph King of Dreams" with no year).
+  // CamelCase titles like "ShangChi" need splitting before they can match
+  // Cinemeta's "Shang-Chi" or "Shang Chi". "Lilo&Stich" still works because
+  // the ampersand is non-alphanumeric and the norm already treats it as a
+  // separator, so the existing scoring path handles it.
+  const queries = Array.from(new Set([title, splitCamelCase(title)].filter(Boolean)));
   try {
-    const hits = await cinemetaSearch(title);
+    let hits: Awaited<ReturnType<typeof cinemetaSearch>> = [];
+    for (const q of queries) {
+      const found = await cinemetaSearch(q);
+      if (found.length) { hits = found; break; }
+    }
     if (!hits.length) return null;
     if (year) {
       const byYear = hits.find((h) => h.year === String(year));
@@ -237,12 +244,20 @@ async function resolveImdbId(
     // in the same order in the candidate title. "Joseph King of Dreams" should
     // beat "King of Dreams" because the first query word starts the candidate.
     const scored = hits
-      .map((h) => ({ h, score: scoreTitle(title, h.name) }))
+      .map((h) => ({ h, score: scoreTitle(queries[0]!, h.name) }))
       .sort((a, b) => b.score - a.score);
     return scored[0]?.h.id ?? null;
   } catch {
     return null;
   }
+}
+
+/** Split a camelCase or run-together word into separate words.
+ *  "ShangChi" → "Shang Chi", "AWonderfulLife" → "A Wonderful Life". */
+function splitCamelCase(s: string): string {
+  return s
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
 }
 
 /** Score a Cinemeta hit against a parsed title. Higher = better match.
