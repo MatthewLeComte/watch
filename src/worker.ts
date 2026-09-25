@@ -635,9 +635,12 @@ async function media(request: Request, env: Env, id: string): Promise<Response> 
     headers.set("content-range", `bytes */${movie.byte_size}`);
     return new Response(null, { status: 416, headers });
   }
-  const obj = await env.watch_bucket.get(`video/${id}`, {
-    range: { offset: range.offset, length: range.length },
-  });
+  let obj: R2ObjectBody | null;
+  try {
+    obj = await rangedGet(env, id, range.offset, range.length);
+  } catch {
+    return json({ error: "storage_unavailable" }, 502);
+  }
   if (obj) {
     const end = range.offset + range.length - 1;
     headers.set("content-range", `bytes ${range.offset}-${end}/${movie.byte_size}`);
@@ -866,6 +869,19 @@ async function trailerFile(request: Request, env: Env, id: string): Promise<Resp
   headers.set("content-length", String(range.length));
   headers.set("content-range", `bytes ${range.offset}-${range.offset + range.length - 1}/${size}`);
   return new Response(obj.body, { status: 206, headers });
+}
+
+/** Ranged R2 read with one retry: a transient storage blip must not kill playback. */
+async function rangedGet(env: Env, id: string, offset: number, length: number): Promise<R2ObjectBody | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const obj = await env.watch_bucket.get(`video/${id}`, { range: { offset, length } });
+      return obj;
+    } catch (err) {
+      if (attempt === 1) throw err;
+    }
+  }
+  return null;
 }
 
 async function rokuCatalog(env: Env): Promise<Response> {
