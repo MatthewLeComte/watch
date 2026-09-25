@@ -13,7 +13,6 @@ final class PlayerModel {
 
     private(set) var player: AVPlayer?
     var errorText: String?
-    var subtitlesOn = true
     private var token: Any?
 
     init(movie: Movie, api: WatchAPI, media: MediaStore, onPosition: @escaping (Double) -> Void) {
@@ -62,15 +61,6 @@ final class PlayerModel {
         token = nil
         player?.pause()
         player = nil
-    }
-
-    /// One-tap subtitles toggle, Apple docs only: load the legible media
-    /// selection group, then selectMediaOptionAutomatically (on) or
-    /// select(nil) (off). No name guessing, no custom renderer.
-    func toggleSubtitles() {
-        subtitlesOn.toggle()
-        let on = subtitlesOn
-        Task { await self.setLegibleAutomatic(on: on) }
     }
 
     private func setLegibleAutomatic(on: Bool) async {

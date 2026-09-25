@@ -1,7 +1,8 @@
 import type { Env } from "./env";
 import { cinemetaMeta } from "./cinemeta";
 import { ingest, saveCache } from "./ingest";
-import { contentTypeFor, extOf, parseByteRange, parseReleaseName, srtToVtt } from "./lib";
+import { contentTypeFor, extOf, parseByteRange, parseReleaseName, pickTrailerId, srtToVtt } from "./lib";
+import type { TrailerVideo } from "./lib";
 import { handleWatchMcp } from "./mcp";
 
 /** R2 requires every part except the last to be at least 5 MiB. 8 MiB matches that rule. */
@@ -29,6 +30,11 @@ type MovieRow = {
   trailer_site: string | null;
   trailer_key: string | null;
   trailer_url: string | null;
+  trailer_r2_key: string | null;
+  trailer_bytes: number | null;
+  trailer_quality: string | null;
+  trailer_status: string | null;
+  trailer_note: string | null;
   status: string;
   match_source: string;
   match_p: number | null;
@@ -69,8 +75,16 @@ export default {
     }
     const publicMedia = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/media$/i);
     if (publicMedia && (request.method === "GET" || request.method === "HEAD")) {
-      if (!(await rokuAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
+      // iOS app streams with Bearer key; Roku channel with keypair headers.
+      const ok = (await rokuAuthorized(request, env)) || authorized(request, env.WATCH_KEY || "");
+      if (!ok) return json({ error: "unauthorized" }, 401);
       return media(request, env, publicMedia[1]!);
+    }
+    const publicTrailer = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/trailer$/i);
+    if (publicTrailer && (request.method === "GET" || request.method === "HEAD")) {
+      const ok = (await rokuAuthorized(request, env)) || authorized(request, env.WATCH_KEY || "");
+      if (!ok) return json({ error: "unauthorized" }, 401);
+      return trailerFile(request, env, publicTrailer[1]!);
     }
     if (path === "/mcp" || path === "/api/mcp") {
       if (!authorized(request, env.WATCH_KEY || "")) return json({ ok: false, error: "unauthorized" }, 401);
@@ -81,6 +95,7 @@ export default {
       if (request.method === "GET" && path === "/v1/items") return listItems(env);
       if (request.method === "POST" && path === "/v1/items") return createItem(request, env);
       if (path === "/v1/items/all/rematch" && request.method === "POST") return rematchAll(env);
+      if (path === "/v1/trailers/backfill" && request.method === "POST") return backfillTrailers(request, env);
       const item = path.match(/^\/v1\/items\/([0-9a-f-]{36})(?:\/(.*))?$/i);
       if (!item) return json({ error: "not_found" }, 404);
       const id = item[1]!;
@@ -93,6 +108,7 @@ export default {
       if (rest === "purge" && request.method === "POST") return purgeOriginal(env, id);
       if (rest === "playback" && request.method === "GET") return playbackItem(env, id);
       if (rest === "rematch" && request.method === "POST") return rematch(env, id);
+      if (rest === "trailer/resolve" && request.method === "POST") return resolveTrailerRoute(env, id);
       if (rest === "poster" && request.method === "PUT") return putPoster(request, env, id);
       const part = rest.match(/^parts\/(\d+)$/);
       if (part && request.method === "PUT") return uploadPart(request, env, id, Number(part[1]));
@@ -632,6 +648,190 @@ async function media(request: Request, env: Env, id: string): Promise<Response> 
   return json({ error: "use_playback", hls: true }, 409);
 }
 
+// MARK: - Trailers: HD files on R2, deduped by YouTube id, quality-checked.
+//
+// Pick: Kinocheck (matched to our IMDb id, English pure trailers, most views).
+// Fetch: Piped API resolves the YouTube id to a direct ≤1080p h264 MP4 URL,
+// which the worker downloads straight into R2. One R2 object per YouTube id,
+// shared by every movie that uses it.
+
+const KINOCHECK = "https://api.kinocheck.com/movies";
+const PIPED_DEFAULTS = [
+  "https://pipedapi.reallyaweso.me",
+  "https://pipedapi.adminforge.de",
+  "https://pipedapi.kavin.rocks",
+];
+const TRAILER_MAX_BYTES = 400 * 1024 * 1024;
+const TRAILER_MIN_BYTES = 512 * 1024;
+
+function pipedInstances(env: Env): string[] {
+  const custom = (env.TRAILER_RESOLVER || "")
+    .split(",")
+    .map((s) => s.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+  return custom.length > 0 ? custom : PIPED_DEFAULTS;
+}
+
+async function kinocheckTrailerId(imdbId: string): Promise<string | null> {
+  const res = await fetch(`${KINOCHECK}?imdb_id=${encodeURIComponent(imdbId)}&language=en`, {
+    headers: { "User-Agent": "Watch/1", Accept: "application/json" },
+  });
+  if (!res.ok) return null;
+  const obj = (await res.json()) as { trailer?: TrailerVideo; videos?: TrailerVideo[] };
+  return pickTrailerId(obj);
+}
+
+type PipedStream = { fileUrl: string; quality: string };
+
+async function pipedStream(env: Env, ytId: string): Promise<PipedStream | null> {
+  for (const base of pipedInstances(env)) {
+    try {
+      const res = await fetch(`${base}/streams/${ytId}`, {
+        headers: { "User-Agent": "Watch/1", Accept: "application/json" },
+      });
+      if (!res.ok) continue;
+      const obj = (await res.json()) as {
+        videoStreams?: Array<{ url?: string; quality?: string; codec?: string; mimeType?: string; format?: string }>;
+      };
+      const cands: Array<{ url: string; h: number }> = [];
+      for (const s of obj.videoStreams ?? []) {
+        if (!s.url) continue;
+        const m = /^(\d+)p/.exec(s.quality ?? "");
+        if (!m) continue;
+        const h = Number(m[1]);
+        if (h < 720 || h > 1080) continue;
+        const codec = (s.codec ?? "").toLowerCase();
+        const mime = (s.mimeType ?? "").toLowerCase();
+        const format = (s.format ?? "").toLowerCase();
+        if (!codec.includes("avc") && !mime.includes("mp4") && !format.includes("mp4")) continue;
+        cands.push({ url: s.url, h });
+      }
+      cands.sort((a, b) => b.h - a.h);
+      if (cands[0]) return { fileUrl: cands[0].url, quality: `${cands[0].h}p` };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+type ResolveResult = { http: number; body: Record<string, unknown> };
+
+async function markTrailer(
+  env: Env,
+  id: string,
+  patch: { r2?: string | null; bytes?: number | null; quality?: string | null; status: string; note?: string | null },
+): Promise<void> {
+  await env.watch
+    .prepare(
+      "UPDATE movie SET trailer_r2_key = ?, trailer_bytes = ?, trailer_quality = ?, trailer_status = ?, trailer_note = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(patch.r2 ?? null, patch.bytes ?? null, patch.quality ?? null, patch.status, patch.note ?? null, new Date().toISOString(), id)
+    .run();
+}
+
+async function resolveTrailerFile(env: Env, id: string): Promise<ResolveResult> {
+  const movie = await env.watch
+    .prepare("SELECT id, imdb_id, trailer_key, trailer_status, trailer_r2_key FROM movie WHERE id = ?")
+    .bind(id)
+    .first<{ id: string; imdb_id: string | null; trailer_key: string | null; trailer_status: string | null; trailer_r2_key: string | null }>();
+  if (!movie) return { http: 404, body: { ok: false, error: "not_found" } };
+  if (movie.trailer_status === "ready" && movie.trailer_r2_key && (await env.watch_bucket.head(movie.trailer_r2_key))) {
+    return { http: 200, body: { ok: true, deduped: true } };
+  }
+  const ytId = movie.trailer_key || (movie.imdb_id ? await kinocheckTrailerId(movie.imdb_id) : null);
+  if (!ytId) {
+    await markTrailer(env, id, { status: "failed", note: "no_trailer_found" });
+    return { http: 404, body: { ok: false, error: "no_trailer_found" } };
+  }
+  const key = `trailers/${ytId}.mp4`;
+  if (await env.watch_bucket.head(key)) {
+    const existing = await env.watch
+      .prepare("SELECT trailer_bytes, trailer_quality FROM movie WHERE trailer_r2_key = ? LIMIT 1")
+      .bind(key)
+      .first<{ trailer_bytes: number | null; trailer_quality: string | null }>();
+    await markTrailer(env, id, {
+      r2: key,
+      bytes: existing?.trailer_bytes ?? null,
+      quality: existing?.trailer_quality ?? null,
+      status: "ready",
+      note: "deduped",
+    });
+    return { http: 200, body: { ok: true, deduped: true, quality: existing?.trailer_quality ?? null } };
+  }
+  const stream = await pipedStream(env, ytId);
+  if (!stream) {
+    await markTrailer(env, id, { status: "failed", note: "no_hd_stream" });
+    return { http: 502, body: { ok: false, error: "no_hd_stream" } };
+  }
+  const up = await fetch(stream.fileUrl, { headers: { "User-Agent": "Watch/1" } });
+  const ctype = up.headers.get("content-type") || "";
+  const clen = Number(up.headers.get("content-length") || "0");
+  if (!up.ok || !up.body || !ctype.startsWith("video/") || clen > TRAILER_MAX_BYTES || (clen > 0 && clen < TRAILER_MIN_BYTES)) {
+    await markTrailer(env, id, { status: "failed", note: "bad_upstream" });
+    return { http: 502, body: { ok: false, error: "bad_upstream" } };
+  }
+  await env.watch_bucket.put(key, up.body, { httpMetadata: { contentType: "video/mp4" } });
+  const bytes = (await env.watch_bucket.head(key))?.size ?? 0;
+  if (bytes < TRAILER_MIN_BYTES) {
+    await env.watch_bucket.delete(key);
+    await markTrailer(env, id, { status: "failed", note: "too_small" });
+    return { http: 502, body: { ok: false, error: "too_small" } };
+  }
+  await markTrailer(env, id, { r2: key, bytes, quality: stream.quality, status: "ready" });
+  return { http: 200, body: { ok: true, deduped: false, quality: stream.quality, bytes } };
+}
+
+async function resolveTrailerRoute(env: Env, id: string): Promise<Response> {
+  const r = await resolveTrailerFile(env, id);
+  return json(r.body, r.http);
+}
+
+async function backfillTrailers(request: Request, env: Env): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as { limit?: number };
+  const limit = Math.min(Math.max(Number(body.limit) || 3, 1), 10);
+  const rows = await env.watch
+    .prepare("SELECT id FROM movie WHERE trailer_status IS NULL OR trailer_status IN ('missing','failed') ORDER BY created_at ASC LIMIT ?")
+    .bind(limit)
+    .all<{ id: string }>();
+  const results: Array<Record<string, unknown>> = [];
+  for (const r of rows.results ?? []) {
+    const out = await resolveTrailerFile(env, r.id);
+    results.push({ id: r.id, ...out.body });
+  }
+  return json({ ok: true, results });
+}
+
+async function trailerFile(request: Request, env: Env, id: string): Promise<Response> {
+  const row = await env.watch
+    .prepare("SELECT trailer_r2_key, trailer_bytes FROM movie WHERE id = ?")
+    .bind(id)
+    .first<{ trailer_r2_key: string | null; trailer_bytes: number | null }>();
+  if (!row?.trailer_r2_key) return json({ error: "no_trailer" }, 404);
+  const headers = new Headers();
+  headers.set("content-type", "video/mp4");
+  headers.set("accept-ranges", "bytes");
+  headers.set("cache-control", "public, max-age=86400");
+  const rangeHeader = request.headers.get("range");
+  if (!rangeHeader) {
+    const obj = await env.watch_bucket.get(row.trailer_r2_key);
+    if (!obj) return json({ error: "missing_object" }, 404);
+    headers.set("content-length", String(obj.size));
+    return new Response(obj.body, { status: 200, headers });
+  }
+  const size = row.trailer_bytes ?? (await env.watch_bucket.head(row.trailer_r2_key))?.size ?? 0;
+  const range = parseByteRange(rangeHeader, size);
+  if (!range || size <= 0) {
+    headers.set("content-range", `bytes */${size}`);
+    return new Response(null, { status: 416, headers });
+  }
+  const obj = await env.watch_bucket.get(row.trailer_r2_key, { range: { offset: range.offset, length: range.length } });
+  if (!obj) return json({ error: "missing_object" }, 404);
+  headers.set("content-length", String(range.length));
+  headers.set("content-range", `bytes ${range.offset}-${range.offset + range.length - 1}/${size}`);
+  return new Response(obj.body, { status: 206, headers });
+}
+
 async function rokuCatalog(env: Env): Promise<Response> {
   const res = await listItems(env);
   const body = await res.text();
@@ -760,6 +960,8 @@ function toItem(row: MovieRow, subs: SubRow[]) {
     trailerSite: row.trailer_site,
     trailerKey: row.trailer_key,
     trailerUrl: row.trailer_url,
+    trailerFileUrl: row.trailer_r2_key ? `https://watch.cornerstonecoatings.com/v1/items/${row.id}/trailer` : null,
+    trailerStatus: row.trailer_status ?? "missing",
     status: row.status,
     matchSource: row.match_source,
     matchP: row.match_p,

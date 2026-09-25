@@ -33,6 +33,7 @@ struct Movie: Codable, Hashable, Identifiable, Sendable {
     var trailerSite: String?
     var trailerKey: String?
     var trailerUrl: String?
+    var trailerFileUrl: String?
     var status: String
     var matchSource: String
     var matchP: Double?

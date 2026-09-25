@@ -1,22 +1,9 @@
 import SwiftUI
 
-struct PlayerCover<Cover: View>: ViewModifier {
-    @Binding var isPresented: Bool
-    @ViewBuilder var cover: () -> Cover
-
-    func body(content: Content) -> some View {
-        content.overlay {
-            if isPresented {
-                cover()
-            }
-        }
-    }
-}
-
 struct DetailView: View {
     @Environment(LibraryModel.self) private var library
     var movieID: String
-    @State private var playing = false
+    @State private var playMovie: Movie?
     @State private var poster: URL?
 
     private var movie: Movie? { library.movies.first { $0.id == movieID } }
@@ -52,7 +39,7 @@ struct DetailView: View {
                         }
                         HStack(spacing: 12) {
                             Button {
-                                playing = true
+                                playMovie = movie
                             } label: {
                                 Label("Play", systemImage: "play.fill")
                                     .frame(maxWidth: .infinity)
@@ -114,9 +101,7 @@ struct DetailView: View {
                 }
                 .background(Color.black.ignoresSafeArea())
                 .navigationTitle(movie.displayTitle)
-                .modifier(PlayerCover(isPresented: $playing) {
-                    PlayerView(movie: movie, onClose: { playing = false })
-                })
+                .modifier(FullScreenPlayer(movie: $playMovie))
                 .task {
                     poster = await library.posterURL(for: movie.id)
                 }

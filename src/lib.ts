@@ -1,5 +1,33 @@
 /** Pure ingest helpers. No network. No second pass. */
 
+export type TrailerVideo = {
+  youtube_video_id?: string;
+  language?: string;
+  categories?: string[];
+  views?: number;
+};
+
+/** Best English pure-trailer YouTube id: featured trailer, else most-viewed. */
+export function pickTrailerId(payload: { trailer?: TrailerVideo; videos?: TrailerVideo[] }): string | null {
+  const cands = [...(payload.trailer ? [payload.trailer] : []), ...(payload.videos ?? [])];
+  let best: string | null = null;
+  let bestViews = -1;
+  for (const v of cands) {
+    const yt = v.youtube_video_id;
+    if (!yt || typeof yt !== "string") continue;
+    if (v.language && v.language !== "en") continue;
+    const cats = v.categories ?? [];
+    if (!cats.includes("Trailer")) continue;
+    if (cats.includes("Clip") || cats.includes("Talk") || cats.includes("Special")) continue;
+    const views = typeof v.views === "number" ? v.views : 0;
+    if (views > bestViews) {
+      bestViews = views;
+      best = yt;
+    }
+  }
+  return best;
+}
+
 export const MAX_RANGE = 8 * 1024 * 1024;
 const CHUNK = 65536;
 

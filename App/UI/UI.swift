@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// UI category — exactly 10 functions. The render layer that the Shell
+/// UI category — 8 functions. The render layer that the Shell
 /// composes. Each function returns a SwiftUI view from the existing UI
 /// primitives; no business logic lives here.
 @MainActor
@@ -30,41 +30,25 @@ enum UI {
         DetailView(movieID: movieID)
     }
 
-    /// 5. The native player.
-    @ViewBuilder
-    static func ui_player(movie: Movie, onClose: @escaping () -> Void) -> some View {
-        PlayerView(movie: movie, onClose: onClose)
-    }
-
-    /// 6. The single-file import screen.
+    /// 5. The single-file import screen.
     @ViewBuilder
     static func ui_import(url: URL, scoped: Bool, onClose: @escaping () -> Void) -> some View {
         ImportView(url: url, scoped: scoped, onClose: onClose)
     }
 
-    /// 7. The bulk import sheet.
+    /// 6. The bulk import sheet.
     @ViewBuilder
     static func ui_bulk(onClose: @escaping () -> Void) -> some View {
         BulkImportView(onClose: onClose)
     }
 
-    /// 8. The inline trailer.
-    @ViewBuilder
-    static func ui_trailer(movie: Movie) -> some View {
-        if let url = Trailer.url(for: movie) {
-            TrailerView(url: url)
-        } else {
-            Color.black
-        }
-    }
-
-    /// 9. The settings screen.
+    /// 7. The settings screen.
     @ViewBuilder
     static func ui_settings() -> some View {
         SettingsView()
     }
 
-    /// 10. The unified error screen.
+    /// 8. The unified error screen.
     @ViewBuilder
     static func ui_error(_ error: any Error) -> some View {
         VStack(spacing: 12) {

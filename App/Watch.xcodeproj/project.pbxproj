@@ -23,7 +23,6 @@
 		B7F2A38611D9917F85C48EB2 /* PlayerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 250F1AB60706CF765ED8C7B3 /* PlayerModel.swift */; };
 		D3B85CDFDEE8442F3B93A820 /* BulkImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFDCF46703B2E0FB16879996 /* BulkImportView.swift */; };
 		D7E800D88139C5ADDD92B1F6 /* PlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 641AEECC5EA2130ACD7822D5 /* PlayerView.swift */; };
-		E72279ECA5E20924EB2C88A1 /* TrailerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BAD0EEF893E8FA47BAB70D4 /* TrailerView.swift */; };
 		F21325F58EC85D335094F605 /* UI.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFCE39CA538A8AF959A22167 /* UI.swift */; };
 /* End PBXBuildFile section */
 
@@ -35,7 +34,6 @@
 		442915E81C5802819E608765 /* MediaStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaStore.swift; sourceTree = "<group>"; };
 		4D6B77D41890D6C9CBE09227 /* Logic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logic.swift; sourceTree = "<group>"; };
 		641AEECC5EA2130ACD7822D5 /* PlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerView.swift; sourceTree = "<group>"; };
-		6BAD0EEF893E8FA47BAB70D4 /* TrailerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrailerView.swift; sourceTree = "<group>"; };
 		753AA01CADE8E6701D41932D /* Cinema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cinema.swift; sourceTree = "<group>"; };
 		75A311301D4F9D70A9942F36 /* Watch.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Watch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7BE5816F5CBA2A8EA4C6B9D8 /* Data.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Data.swift; sourceTree = "<group>"; };
@@ -82,7 +80,6 @@
 				9EFF84F013A2FB48A35F48A1 /* LibraryView.swift */,
 				641AEECC5EA2130ACD7822D5 /* PlayerView.swift */,
 				F596F00590151A29BF28CC47 /* SettingsView.swift */,
-				6BAD0EEF893E8FA47BAB70D4 /* TrailerView.swift */,
 				DFCE39CA538A8AF959A22167 /* UI.swift */,
 			);
 			path = UI;
@@ -216,7 +213,6 @@
 				D7E800D88139C5ADDD92B1F6 /* PlayerView.swift in Sources */,
 				8C51842BA656799BFCDADCE5 /* SettingsView.swift in Sources */,
 				50895D5B823423C97D7DE99A /* Shell.swift in Sources */,
-				E72279ECA5E20924EB2C88A1 /* TrailerView.swift in Sources */,
 				F21325F58EC85D335094F605 /* UI.swift in Sources */,
 				0BA4BE8C7BAF51DE108FDAE6 /* WatchAPI.swift in Sources */,
 			);

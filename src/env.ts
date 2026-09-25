@@ -11,6 +11,8 @@ export interface Env {
   /** Comma-separated device UUIDs allowed. Empty = allow any device with valid keypair. */
   ROKU_ALLOWED_DEVICES?: string;
   OPENSUBTITLES_API_KEY?: string;
+  /** Comma-separated Piped API base URLs for trailer resolution. Empty = built-in defaults. */
+  TRAILER_RESOLVER?: string;
 }
 
 /** Structural type for a Secrets Store secret binding (runtime provides .get()). */
