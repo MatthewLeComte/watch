@@ -75,14 +75,14 @@ export default {
     }
     const publicMedia = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/media$/i);
     if (publicMedia && (request.method === "GET" || request.method === "HEAD")) {
-      // iOS app streams with Bearer key; Roku channel with keypair headers.
-      const ok = (await rokuAuthorized(request, env)) || authorized(request, env.WATCH_KEY || "");
+      // iOS app streams with Bearer key or ?key=; Roku channel with keypair headers.
+      const ok = (await rokuAuthorized(request, env)) || authorized(request, env.WATCH_KEY || "") || queryKey(request, env);
       if (!ok) return json({ error: "unauthorized" }, 401);
       return media(request, env, publicMedia[1]!);
     }
     const publicTrailer = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/trailer$/i);
     if (publicTrailer && (request.method === "GET" || request.method === "HEAD")) {
-      const ok = (await rokuAuthorized(request, env)) || authorized(request, env.WATCH_KEY || "");
+      const ok = (await rokuAuthorized(request, env)) || authorized(request, env.WATCH_KEY || "") || queryKey(request, env);
       if (!ok) return json({ error: "unauthorized" }, 401);
       try {
         return await trailerFile(request, env, publicTrailer[1]!);
@@ -176,6 +176,14 @@ function constantTimeEqual(a: string, b: string): boolean {
   let n = 0;
   for (let i = 0; i < a.length; i++) n |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return n === 0;
+}
+
+/** Key via ?key= query param (Apple clients send it in the URL so auth
+ * survives redirects and range follow-ups that can drop custom headers). */
+function queryKey(request: Request, env: Env): boolean {
+  if (!env.WATCH_KEY) return false;
+  const got = new URL(request.url).searchParams.get("key") || "";
+  return constantTimeEqual(got, env.WATCH_KEY);
 }
 
 function json(data: unknown, status = 200, extra?: HeadersInit): Response {

@@ -12,6 +12,15 @@ struct LibraryView: View {
     @State private var shelfID: String?
     @State private var posters: [String: URL] = [:]
     @State private var playing: Movie?
+    @State private var streamTrailers: [String: URL] = [:]
+
+    /// Hero trailer: server HD file wins; else resolve direct MP4
+    /// (Kinocheck match → Piped stream URL), streamed natively.
+    private var heroStreamURL: URL? {
+        guard let movie = heroMovie else { return nil }
+        if let raw = movie.trailerFileUrl, let url = URL(string: raw) { return url }
+        return streamTrailers[movie.id]
+    }
 
     private let cardW: CGFloat = 150
     private let cardH: CGFloat = 225
@@ -35,6 +44,7 @@ struct LibraryView: View {
             .onChange(of: library.openImport) { if let url = library.openImport { pendingImport = url; pendingScoped = library.openImportScoped; library.openImport = nil } }
             .onChange(of: shelves.map(\.id)) { _, ids in if let id = shelfID, !ids.contains(id) { shelfID = nil } }
             .task { await loadPosters() }
+            .task(id: heroMovie?.id) { await resolveStreamTrailer() }
         }
     }
 
@@ -92,9 +102,8 @@ struct LibraryView: View {
                 Color.black
                 if playing == nil,
                    let movie = heroMovie,
-                   let raw = movie.trailerFileUrl,
-                   let url = URL(string: raw) {
-                    HeroTrailer(url: url, apiKey: library.api.key)
+                   let url = heroStreamURL {
+                    HeroTrailer(url: url, apiKey: url.host?.contains("cornerstonecoatings.com") == true ? library.api.key : nil)
                         .id(url.absoluteString)
                         .allowsHitTesting(false)
                 } else if let movie = heroMovie {
@@ -238,13 +247,32 @@ struct LibraryView: View {
         }
     }
 
+    /// Direct-stream trailer: Kinocheck (IMDb id → English pure trailer)
+    /// then Piped (YouTube id → 720p h264 MP4). No server file needed.
+    private func resolveStreamTrailer() async {
+        guard let movie = heroMovie,
+              movie.trailerFileUrl == nil,
+              streamTrailers[movie.id] == nil,
+              let imdb = movie.imdbId, !imdb.isEmpty,
+              let metaURL = URL(string: "https://api.kinocheck.com/movies?imdb_id=\(imdb)&language=en")
+        else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: metaURL)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let ytId = TrailerResolver.pick(obj),
+                  let fileURL = await TrailerResolver.streamURL(ytId: ytId)
+            else { return }
+            streamTrailers[movie.id] = fileURL
+        } catch { }
+    }
+
     private func play(_ m: Movie) { playing = m }
 }
 
 /// Native muted looping trailer. Poster stays underneath until first frame.
 private struct HeroTrailer: View {
     var url: URL
-    var apiKey: String
+    var apiKey: String?
     @State private var player: AVPlayer?
     @State private var ready = false
     @State private var tick: Any?
@@ -265,7 +293,17 @@ private struct HeroTrailer: View {
     private func start() {
         stop()
         ready = false
-        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(apiKey)"]])
+        var finalURL = url
+        if let apiKey, var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            comps.queryItems = (comps.queryItems ?? []) + [URLQueryItem(name: "key", value: apiKey)]
+            finalURL = comps.url ?? url
+        }
+        let asset: AVURLAsset
+        if let apiKey {
+            asset = AVURLAsset(url: finalURL, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(apiKey)"]])
+        } else {
+            asset = AVURLAsset(url: finalURL)
+        }
         let next = AVPlayer(playerItem: AVPlayerItem(asset: asset))
         next.isMuted = true
         next.allowsExternalPlayback = false
@@ -309,6 +347,61 @@ private struct HeroPlayerLayer: UIViewRepresentable {
 }
 
 private struct Shelf: Identifiable { let id: String; let title: String; let movies: [Movie] }
+
+/// Trailer resolution without server files: Kinocheck match → Piped MP4.
+enum TrailerResolver {
+    private static let instances = [
+        "https://pipedapi.reallyaweso.me",
+        "https://pipedapi.adminforge.de",
+        "https://pipedapi.kavin.rocks",
+    ]
+
+    static func pick(_ obj: [String: Any]) -> String? {
+        var cands: [[String: Any]] = []
+        if let t = obj["trailer"] as? [String: Any] { cands.append(t) }
+        cands.append(contentsOf: (obj["videos"] as? [[String: Any]]) ?? [])
+        var best: String?
+        var bestViews = -1
+        for v in cands {
+            guard let yt = v["youtube_video_id"] as? String, !yt.isEmpty else { continue }
+            if let lang = v["language"] as? String, lang != "en" { continue }
+            let cats = (v["categories"] as? [String]) ?? []
+            guard cats.contains("Trailer"),
+                  !cats.contains("Clip"), !cats.contains("Talk"), !cats.contains("Special")
+            else { continue }
+            let views = (v["views"] as? Int) ?? 0
+            if views > bestViews { bestViews = views; best = yt }
+        }
+        return best
+    }
+
+    static func streamURL(ytId: String) async -> URL? {
+        for base in instances {
+            guard let api = URL(string: "\(base)/streams/\(ytId)") else { continue }
+            do {
+                let (data, _) = try await URLSession.shared.data(from: api)
+                guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let streams = obj["videoStreams"] as? [[String: Any]]
+                else { continue }
+                var best: (url: String, h: Int)?
+                for s in streams {
+                    guard let raw = s["url"] as? String, let url = URL(string: raw),
+                          let q = s["quality"] as? String,
+                          let h = Int(q.replacingOccurrences(of: "p", with: "")),
+                          h >= 480, h <= 1080
+                    else { continue }
+                    let codec = ((s["codec"] as? String) ?? "").lowercased()
+                    let mime = ((s["mimeType"] as? String) ?? "").lowercased()
+                    let format = ((s["format"] as? String) ?? "").lowercased()
+                    guard codec.contains("avc") || mime.contains("mp4") || format.contains("mp4") else { continue }
+                    if best == nil || h > best!.h { best = (url.absoluteString, h) }
+                }
+                if let best, let url = URL(string: best.url) { return url }
+            } catch { continue }
+        }
+        return nil
+    }
+}
 
 extension Collection {
     subscript(safe index: Index) -> Element? { indices.contains(index) ? self[index] : nil }
