@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="GridItem" extends="Group" init="InitGridItem">
+  <children>
+    <Poster
+      id="poster"
+      width="176"
+      height="264"
+      loadDisplayMode="scaleToFit"
+      />
+    <Group
+      id="titleOverlay"
+      visible="false"
+      translation="[0, 220]"
+      >
+      <Rectangle
+        id="titleBg"
+        width="176"
+        height="44"
+        color="0x000000D0"
+        />
+      <Label
+        id="title"
+        translation="[8, 4]"
+        width="160"
+        maxLines="2"
+        wrap="true"
+        font="font:SmallSystemFont"
+        horizAlign="center"
+        color="0xFFFFFFFF"
+        />
+    </Group>
+  </children>
+  <interface>
+    <field id="itemContent" type="node" onChange="OnContentChange" />
+    <field id="itemHasFocus" type="boolean" onChange="OnFocusChange" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/source/GridItem.brs" />
+</component>

@@ -1,0 +1,55 @@
+# Roku
+
+Checkout: `/Users/matthew/Developer/GitHub/roku`  
+GitHub: `MatthewLeComte/roku`  
+Channel: `Watch` (private, sideloaded)
+
+Target: Roku TV, SceneGraph, FHD (`ui_resolutions=fhd`). No HLS, no subtitles, no auth — direct MP4 from the `watch` worker. Built for the home network; do not expose to the public internet without a real auth layer on the worker.
+
+## Build
+
+Roku apps are a zipped directory. No build step, no npm.
+
+```
+cd /Users/matthew/Developer/GitHub/roku
+zip -r app.zip manifest source components -x "*.DS_Store"
+```
+
+Sideload into Developer Mode (Settings → System → Advanced system settings → Developer settings on the device):
+
+```
+curl -F "archive=@app.zip" http://<roku-ip>/plugin_install
+```
+
+## Data sources
+
+All four are public on the `watch` worker (no `WATCH_KEY` required).
+
+| Endpoint | Use |
+|----------|-----|
+| `GET /v1/catalog` | JSON list of all items, CORS, `Cache-Control: 60s` |
+| `GET /v1/items/{id}/media` | MP4 with `Accept-Ranges: bytes` for seek |
+| `GET /v1/items/{id}/poster` | 2:3 portrait, JPEG/WebP, CORS, immutable |
+| `GET /v1/items/{id}/backdrop` | 16:9 landscape, JPEG/WebP, CORS, immutable |
+
+See `watch/POSTERS.md` for the image contract and validation rules.
+
+## Where to edit
+
+| Task | Open |
+|------|------|
+| Entry, screen lifecycle | `source/Main.brs` |
+| Grid + detail + player (single scene) | `components/MainScene.xml`, `source/MainScene.brs` |
+| Grid item | `components/GridItem.xml`, `source/GridItem.brs` |
+| Catalog fetch | `source/Catalog.brs` |
+
+The app uses a single `MainScene` with three view groups (`grid`, `detail`, `player`) and a manual back stack. Detail and player swap in on selection, back key pops the stack.
+
+## Out of scope for v1
+
+- Resume / watched-state tracking.
+- HLS / adaptive bitrate.
+- Subtitle tracks.
+- Auth on the catalog or media endpoints.
+- Channel icon and splash screen branding.
+- Player controls overlay (uses the default `Video` overlay).
