@@ -5,9 +5,9 @@
   "type": "module",
   "description": "watch — private movie library on Cloudflare",
   "scripts": {
-    "build": "echo build-ok",
-    "deploy": "node tools/code-ship-only.mjs --npm-deploy",
-    "versions:upload": "node tools/code-ship-only.mjs --npm-deploy",
+    "build": "npm run typecheck",
+    "deploy": "echo 'Deploy via Workers Builds only'",
+    "versions:upload": "echo 'Deploy via Workers Builds only'",
     "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
