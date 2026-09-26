@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Search 67movies and add to library.
+/// Search sources and add to library.
 struct SourceSearchView: View {
     @Environment(LibraryModel.self) private var library
     @Environment(\.dismiss) private var dismiss
@@ -17,6 +17,7 @@ struct SourceSearchView: View {
     @State private var downloading = false
     @State private var downloadStage = ""
     @State private var selectedSource = "67movies"
+    @State private var availableSources: [SourceInfo] = []
 
     var body: some View {
         NavigationStack {
@@ -26,13 +27,13 @@ struct SourceSearchView: View {
                 VStack(spacing: 0) {
                     // Source picker
                     Menu {
-                        ForEach(["67movies"], id: \.self) { src in
+                        ForEach(availableSources) { src in
                             Button {
-                                selectedSource = src
+                                selectedSource = src.key
                             } label: {
                                 HStack {
-                                    Text(src)
-                                    if selectedSource == src {
+                                    Text(src.name)
+                                    if selectedSource == src.key {
                                         Image(systemName: "checkmark")
                                     }
                                 }
@@ -41,7 +42,7 @@ struct SourceSearchView: View {
                     } label: {
                         HStack {
                             Image(systemName: "server.rack")
-                            Text(selectedSource)
+                            Text(availableSources.first { $0.key == selectedSource }?.name ?? selectedSource)
                             Image(systemName: "chevron.up.chevron.down")
                         }
                         .font(.subheadline.weight(.medium))
@@ -166,6 +167,17 @@ struct SourceSearchView: View {
                     Task { await doSearch() }
                 } else {
                     results = []
+                }
+            }
+            .task {
+                do {
+                    availableSources = try await library.listSources()
+                    if let first = availableSources.first {
+                        selectedSource = first.key
+                    }
+                } catch {
+                    availableSources = [SourceInfo(key: "67movies", name: "67movies")]
+                    selectedSource = "67movies"
                 }
             }
         }
