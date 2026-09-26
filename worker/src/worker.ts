@@ -300,7 +300,7 @@ async function createItem(request: Request, env: Env): Promise<Response> {
   const filename = String(body.filename || "").slice(0, 300);
   const ext = extOf(filename);
   const byteSize = Number(body.byteSize);
-  if (!ext) return json({ error: "use_mp4_m4v_or_mov" }, 400);
+  if (!ext) return json({ error: "unsupported_video_format" }, 400);
   if (!Number.isFinite(byteSize) || byteSize <= 0 || byteSize > 20 * 1024 * 1024 * 1024) {
     return json({ error: "bad_size" }, 400);
   }

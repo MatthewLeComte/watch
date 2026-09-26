@@ -166,12 +166,61 @@ export function parseByteRange(
 
 export function extOf(filename: string): string | null {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  if (ext === "mp4" || ext === "m4v" || ext === "mov") return ext;
+  if (
+    ext === "mp4" ||
+    ext === "m4v" ||
+    ext === "mov" ||
+    ext === "mkv" ||
+    ext === "webm" ||
+    ext === "avi" ||
+    ext === "flv" ||
+    ext === "wmv" ||
+    ext === "mpg" ||
+    ext === "mpeg" ||
+    ext === "m2v" ||
+    ext === "m4s" ||
+    ext === "ts" ||
+    ext === "m2ts" ||
+    ext === "vob" ||
+    ext === "ogv" ||
+    ext === "3gp" ||
+    ext === "3g2"
+  )
+    return ext;
   return null;
 }
 
 export function contentTypeFor(ext: string): string {
-  if (ext === "mov") return "video/quicktime";
-  if (ext === "m4v") return "video/x-m4v";
-  return "video/mp4";
+  switch (ext) {
+    case "mov":
+      return "video/quicktime";
+    case "m4v":
+      return "video/x-m4v";
+    case "mkv":
+      return "video/x-matroska";
+    case "webm":
+      return "video/webm";
+    case "avi":
+      return "video/x-msvideo";
+    case "flv":
+      return "video/x-flv";
+    case "wmv":
+      return "video/x-ms-wmv";
+    case "mpg":
+    case "mpeg":
+    case "m2v":
+      return "video/mpeg";
+    case "ts":
+    case "m2ts":
+      return "video/mp2t";
+    case "vob":
+      return "video/vnd.dlna.mpeg-tts";
+    case "ogv":
+      return "video/ogg";
+    case "3gp":
+    case "3g2":
+      return "video/3gpp";
+    default:
+      return "video/mp4";
+  }
 }
