@@ -1,0 +1,147 @@
+2026-09-26 08:29:05 +0000 [MT] Initial pipeline context: <IDEDistributionProcessingPipelineContext: 0x7a79412400; archive(resolved)="<IDEArchive: 0x7a7b25abc0>", distributionTask(resolved)="2", distributionDestination(resolved)="1", distributionMethod(resolved)="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team(resolved)="<IDEProvisioningBasicTeam: 0x7a7aa44b00; teamID='QB54A5B6LN', teamName='(null)'>">
+	Chain (14, self inclusive):
+	<IDEDistributionProcessingPipelineContext: 0x7a79412400; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="<IDEProvisioningBasicTeam: 0x7a7aa44b00; teamID='QB54A5B6LN', teamName='(null)'>">
+	<IDEDistributionProcessingPipelineContext: 0x7a79412700; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="<IDEProvisioningBasicTeam: 0x7a7aa44b00; teamID='QB54A5B6LN', teamName='(null)'>">
+	<IDEDistributionContext: 0x7a7aa3a580; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="<IDEProvisioningBasicTeam: 0x7a7aa44b00; teamID='QB54A5B6LN', teamName='(null)'>">
+	<IDEDistributionContext: 0x7a7aa39680; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="<IDEProvisioningBasicTeam: 0x7a7aa44b00; teamID='QB54A5B6LN', teamName='(null)'>">
+	<IDEDistributionContext: 0x7a7aa39400; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="<IDEProvisioningBasicTeam: 0x7a7aa44b00; teamID='QB54A5B6LN', teamName='(null)'>">
+	<IDEDistributionContext: 0x7a7aa39180; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="<IDEProvisioningBasicTeam: 0x7a7aa44b00; teamID='QB54A5B6LN', teamName='(null)'>">
+	<IDEDistributionContext: 0x7a7aa38f00; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="<IDEProvisioningBasicTeam: 0x7a7aa44b00; teamID='QB54A5B6LN', teamName='(null)'>">
+	<IDEDistributionContext: 0x7a7aa38c80; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="<IDEProvisioningBasicTeam: 0x7a7aa44b00; teamID='QB54A5B6LN', teamName='(null)'>">
+	<IDEDistributionContext: 0x7a7aa38a00; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="<IDEProvisioningBasicTeam: 0x7a7aa44b00; teamID='QB54A5B6LN', teamName='(null)'>">
+	<IDEDistributionContext: 0x7a7aa38780; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="(null)">
+	<IDEDistributionContext: 0x7a7aa38500; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="(null)">
+	<IDEDistributionContext: 0x7a7aa38280; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="(null)">
+	<IDEDistributionContext: 0x7a7aa38000; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="<IDEDistributionMethodiOSAdHoc: 0x7a7b51a020>", team="(null)">
+	<IDEDistributionContext: 0x101105d00; archive = "<IDEArchive: 0x7a7b25abc0>", distributionMethod="(null)", team="(null)">
+</IDEDistributionProcessingPipelineContext: 0x7a79412400>
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionCreateDestRootStep
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionCopyItemStep
+2026-09-26 08:29:05 +0000 [MT] Running /usr/bin/ditto '-V' '/Users/matthew/Developer/GitHub/watch/build/archives/Watch-iOS.xcarchive/Products/Applications/Watch.app' '/var/folders/fy/_kxx1pw937zgxv1cq99rg62m0000gn/T/XcodeDistPipeline.~~~5ILpkn/Root/Payload/Watch.app'
+2026-09-26 08:29:05 +0000  >>> Copying /Users/matthew/Developer/GitHub/watch/build/archives/Watch-iOS.xcarchive/Products/Applications/Watch.app 
+2026-09-26 08:29:05 +0000  copying file ./_CodeSignature/CodeResources ... 
+2026-09-26 08:29:05 +0000  hardlinked ./_CodeSignature/CodeResources
+2026-09-26 08:29:05 +0000  copying file ./AppIcon60x60@2x.png ... 
+2026-09-26 08:29:05 +0000  hardlinked ./AppIcon60x60@2x.png
+2026-09-26 08:29:05 +0000  copying file ./Assets.car ... 
+2026-09-26 08:29:05 +0000  hardlinked ./Assets.car
+2026-09-26 08:29:05 +0000  copying file ./AppIcon76x76@2x~ipad.png ... 
+2026-09-26 08:29:05 +0000  hardlinked ./AppIcon76x76@2x~ipad.png
+2026-09-26 08:29:05 +0000  copying file ./Watch ... 
+2026-09-26 08:29:05 +0000  hardlinked ./Watch
+2026-09-26 08:29:05 +0000  copying file ./embedded.mobileprovision ... 
+2026-09-26 08:29:05 +0000  hardlinked ./embedded.mobileprovision
+2026-09-26 08:29:05 +0000  copying file ./Info.plist ... 
+2026-09-26 08:29:05 +0000  hardlinked ./Info.plist
+2026-09-26 08:29:05 +0000  copying file ./PkgInfo ... 
+2026-09-26 08:29:05 +0000  hardlinked ./PkgInfo
+2026-09-26 08:29:05 +0000 [MT] /usr/bin/ditto exited with 0
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionEmbedProfileStep
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionInfoPlistStep
+2026-09-26 08:29:05 +0000 [MT] Skipping step: IDEDistributionInfoPlistStep because it said so
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionAppThinningPlistStep
+2026-09-26 08:29:05 +0000 [MT] Skipping step: IDEDistributionAppThinningPlistStep because it said so
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionSymbolsStep
+2026-09-26 08:29:05 +0000 [MT] Skipping step: IDEDistributionSymbolsStep because it said so
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionAppThinningStep
+2026-09-26 08:29:05 +0000 [MT] Skipping step: IDEDistributionAppThinningStep because it said so
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionArchThinningStep
+2026-09-26 08:29:05 +0000 [MT] Archs to thin for item /Users/matthew/Developer/GitHub/watch/build/archives/Watch-iOS.xcarchive/Products/Applications/Watch.app are []
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionODRStep
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionStripXattrsStep
+2026-09-26 08:29:05 +0000 [MT] Skipping stripping extended attributes because the codesign step will strip them.
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionCodesignStep
+2026-09-26 08:29:05 +0000 [MT] Entitlements for <IDEDistributionItem: 0x7a7a30d320; bundleID='watch.apps', path='<DVTFilePath:0x7a7a613ea0:'/Users/matthew/Developer/GitHub/watch/build/archives/Watch-iOS.xcarchive/Products/Applications/Watch.app'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x7a7a30d140; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x7a7a2bbf00; name='Apple Development: Matthew LeComte (4B868V2UMV)', hash='58A66CA5B7B273541942A7750C78D17FF3F8252F', serialNumber='5B842D6C333EE99A44771761D7200C2', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2026-06-19 06:05:31 +0000''>', entitlements='{
+    "application-identifier" = "QB54A5B6LN.watch.apps";
+    "com.apple.developer.coremedia.hls.interstitial-preview" = 1;
+    "com.apple.developer.coremedia.hls.low-latency" = 1;
+    "com.apple.developer.low-latency-streaming" = 1;
+    "com.apple.developer.sustained-execution" = 1;
+    "com.apple.developer.team-identifier" = QB54A5B6LN;
+    "get-task-allow" = 1;
+}', teamID='QB54A5B6LN', identifier='watch.apps', executablePath='<DVTFilePath:0x7a7a30d1a0:'/Users/matthew/Developer/GitHub/watch/build/archives/Watch-iOS.xcarchive/Products/Applications/Watch.app/Watch'>', hardenedRuntime='0'>'>: {
+    "application-identifier" = "QB54A5B6LN.watch.apps";
+    "com.apple.developer.coremedia.hls.interstitial-preview" = 1;
+    "com.apple.developer.coremedia.hls.low-latency" = 1;
+    "com.apple.developer.low-latency-streaming" = 1;
+    "com.apple.developer.sustained-execution" = 1;
+    "com.apple.developer.team-identifier" = QB54A5B6LN;
+    "get-task-allow" = 0;
+}
+2026-09-26 08:29:05 +0000 [MT] Associated App Clip Identifiers Filter: Skipping because "com.apple.developer.associated-appclip-app-identifiers" is not present
+2026-09-26 08:29:05 +0000 [MT] Entitlements for <IDEDistributionItem: 0x7a7a30d320; bundleID='watch.apps', path='<DVTFilePath:0x7a7a613ea0:'/Users/matthew/Developer/GitHub/watch/build/archives/Watch-iOS.xcarchive/Products/Applications/Watch.app'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x7a7a30d140; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x7a7a2bbf00; name='Apple Development: Matthew LeComte (4B868V2UMV)', hash='58A66CA5B7B273541942A7750C78D17FF3F8252F', serialNumber='5B842D6C333EE99A44771761D7200C2', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2026-06-19 06:05:31 +0000''>', entitlements='{
+    "application-identifier" = "QB54A5B6LN.watch.apps";
+    "com.apple.developer.coremedia.hls.interstitial-preview" = 1;
+    "com.apple.developer.coremedia.hls.low-latency" = 1;
+    "com.apple.developer.low-latency-streaming" = 1;
+    "com.apple.developer.sustained-execution" = 1;
+    "com.apple.developer.team-identifier" = QB54A5B6LN;
+    "get-task-allow" = 1;
+}', teamID='QB54A5B6LN', identifier='watch.apps', executablePath='<DVTFilePath:0x7a7a30d1a0:'/Users/matthew/Developer/GitHub/watch/build/archives/Watch-iOS.xcarchive/Products/Applications/Watch.app/Watch'>', hardenedRuntime='0'>'> are: {
+    "application-identifier" = "QB54A5B6LN.watch.apps";
+    "com.apple.developer.coremedia.hls.interstitial-preview" = 1;
+    "com.apple.developer.coremedia.hls.low-latency" = 1;
+    "com.apple.developer.low-latency-streaming" = 1;
+    "com.apple.developer.sustained-execution" = 1;
+    "com.apple.developer.team-identifier" = QB54A5B6LN;
+    "get-task-allow" = 0;
+}
+2026-09-26 08:29:05 +0000 [MT] Writing entitlements for <IDEDistributionItem: 0x7a7a30d320; bundleID='watch.apps', path='<DVTFilePath:0x7a7a613ea0:'/Users/matthew/Developer/GitHub/watch/build/archives/Watch-iOS.xcarchive/Products/Applications/Watch.app'>', codeSigningInfo='<_DVTCodeSigningInformation_Path: 0x7a7a30d140; isSigned='1', isAdHocSigned='0', signingCertificate='<DVTSigningCertificate: 0x7a7a2bbf00; name='Apple Development: Matthew LeComte (4B868V2UMV)', hash='58A66CA5B7B273541942A7750C78D17FF3F8252F', serialNumber='5B842D6C333EE99A44771761D7200C2', certificateKinds='(
+    "1.2.840.113635.100.6.1.12",
+    "1.2.840.113635.100.6.1.2"
+), issueDate='2026-06-19 06:05:31 +0000''>', entitlements='{
+    "application-identifier" = "QB54A5B6LN.watch.apps";
+    "com.apple.developer.coremedia.hls.interstitial-preview" = 1;
+    "com.apple.developer.coremedia.hls.low-latency" = 1;
+    "com.apple.developer.low-latency-streaming" = 1;
+    "com.apple.developer.sustained-execution" = 1;
+    "com.apple.developer.team-identifier" = QB54A5B6LN;
+    "get-task-allow" = 1;
+}', teamID='QB54A5B6LN', identifier='watch.apps', executablePath='<DVTFilePath:0x7a7a30d1a0:'/Users/matthew/Developer/GitHub/watch/build/archives/Watch-iOS.xcarchive/Products/Applications/Watch.app/Watch'>', hardenedRuntime='0'>'> to: /var/folders/fy/_kxx1pw937zgxv1cq99rg62m0000gn/T/XcodeDistPipeline.~~~5ILpkn/entitlements~~~nNEMla
+2026-09-26 08:29:05 +0000 [MT] invoking codesign: <NSConcreteTask: 0x7a7c7eddb0; launchPath='/usr/bin/codesign', arguments='(
+    "-f",
+    "-s",
+    5A0D9428EC62190C5C801D41D2807579A3D6B16E,
+    "--entitlements",
+    "/var/folders/fy/_kxx1pw937zgxv1cq99rg62m0000gn/T/XcodeDistPipeline.~~~5ILpkn/entitlements~~~nNEMla",
+    "--preserve-metadata=identifier,flags,runtime,launch-constraints,library-constraints",
+    "--generate-entitlement-der",
+    "--strip-disallowed-xattrs",
+    "-vvv",
+    "/var/folders/fy/_kxx1pw937zgxv1cq99rg62m0000gn/T/XcodeDistPipeline.~~~5ILpkn/Root/Payload/Watch.app"
+)'>
+2026-09-26 08:29:05 +0000 [MT] codesign output: /var/folders/fy/_kxx1pw937zgxv1cq99rg62m0000gn/T/XcodeDistPipeline.~~~5ILpkn/Root/Payload/Watch.app: replacing existing signature
+/var/folders/fy/_kxx1pw937zgxv1cq99rg62m0000gn/T/XcodeDistPipeline.~~~5ILpkn/Root/Payload/Watch.app: signed app bundle with Mach-O thin (arm64) [watch.apps]
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionZipODRItemStep
+2026-09-26 08:29:05 +0000 [MT] Skipping step: IDEDistributionZipODRItemStep because it said so
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionCreateIPAStep
+2026-09-26 08:29:05 +0000 [MT] Running /usr/bin/ditto '-V' '-c' '-k' '--norsrc' '/var/folders/fy/_kxx1pw937zgxv1cq99rg62m0000gn/T/XcodeDistPipeline.~~~5ILpkn/Root' '/var/folders/fy/_kxx1pw937zgxv1cq99rg62m0000gn/T/XcodeDistPipeline.~~~5ILpkn/Packages/Watch.ipa'
+2026-09-26 08:29:05 +0000  >>> Copying /var/folders/fy/_kxx1pw937zgxv1cq99rg62m0000gn/T/XcodeDistPipeline.~~~5ILpkn/Root 
+2026-09-26 08:29:05 +0000  copying file ./Payload/Watch.app/_CodeSignature/CodeResources ... 
+2775 bytes for ./Payload/Watch.app/_CodeSignature/CodeResources
+2026-09-26 08:29:05 +0000  copying file ./Payload/Watch.app/AppIcon60x60@2x.png ... 
+2026-09-26 08:29:05 +0000  3526 bytes for ./Payload/Watch.app/AppIcon60x60@2x.png
+2026-09-26 08:29:05 +0000  copying file ./Payload/Watch.app/Assets.car ... 
+2026-09-26 08:29:05 +0000  93960 bytes for ./Payload/Watch.app/Assets.car
+2026-09-26 08:29:05 +0000  copying file ./Payload/Watch.app/AppIcon76x76@2x~ipad.png ... 
+2026-09-26 08:29:05 +0000  4589 bytes for ./Payload/Watch.app/AppIcon76x76@2x~ipad.png
+2026-09-26 08:29:05 +0000  copying file ./Payload/Watch.app/Watch ... 
+2026-09-26 08:29:05 +0000  1099920 bytes for ./Payload/Watch.app/Watch
+copying file ./Payload/Watch.app/embedded.mobileprovision ... 
+2026-09-26 08:29:05 +0000  37529 bytes for ./Payload/Watch.app/embedded.mobileprovision
+2026-09-26 08:29:05 +0000  copying file ./Payload/Watch.app/Info.plist ... 
+2026-09-26 08:29:05 +0000  1500 bytes for ./Payload/Watch.app/Info.plist
+2026-09-26 08:29:05 +0000  copying file ./Payload/Watch.app/PkgInfo ... 
+2026-09-26 08:29:05 +0000  8 bytes for ./Payload/Watch.app/PkgInfo
+2026-09-26 08:29:05 +0000 [MT] /usr/bin/ditto exited with 0
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionAppStoreInformationStep
+2026-09-26 08:29:05 +0000 [MT] Skipping step: IDEDistributionAppStoreInformationStep because it said so
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionGenerateProcessedDistributionItems
+2026-09-26 08:29:05 +0000 [MT] IDEDistributionItem init <DVTFilePath:0x7a7a30e400:'/var/folders/fy/_kxx1pw937zgxv1cq99rg62m0000gn/T/XcodeDistPipeline.~~~5ILpkn/Root/Payload/Watch.app'>
+2026-09-26 08:29:05 +0000 [MT] Processing step: IDEDistributionCreateManifestStep

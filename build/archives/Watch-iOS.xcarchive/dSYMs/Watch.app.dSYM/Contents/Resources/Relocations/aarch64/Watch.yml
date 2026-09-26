@@ -1,0 +1,5 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     '/Applications/ArchiveIntermediates/Watch/InstallationBuildProductsLocation/Applications/Watch.app/Watch'
+relocations:     []
+...

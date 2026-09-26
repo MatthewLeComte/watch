@@ -98,18 +98,18 @@ export default {
       return handleWatchMcp(request, env);
     }
 
-    // Generic source endpoints
-    const sourcesList = path.match(/^\/v1\/sources$/i);
+    // Generic source endpoints (allow optional trailing slash)
+    const sourcesList = path.match(/^\/v1\/sources\/?$/i);
     if (sourcesList && request.method === "GET") {
       return json(SOURCES.listSources().map(s => ({ key: s.key, name: s.name })));
     }
 
-    const sourceSearch = path.match(/^\/v1\/sources\/search$/i);
+    const sourceSearch = path.match(/^\/v1\/sources\/search\/?$/i);
     if (sourceSearch && request.method === "GET") {
       const url = new URL(request.url);
       const q = url.searchParams.get("q") || "";
       const imdb = url.searchParams.get("imdb") || "";
-      const sourceKey = url.searchParams.get("source") || "67movies";
+      const sourceKey = url.searchParams.get("source") || "meta";
       const source = SOURCES.get(sourceKey);
       if (!source) return json({ error: "source_not_found" }, 404);
       if (imdb) {
@@ -124,7 +124,7 @@ export default {
     if (!(await sourceAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
     try {
       // Source resolve (auth required)
-      const sourceResolve = path.match(/^\/v1\/sources\/([a-z0-9-]+)\/resolve\/(.+)$/i);
+      const sourceResolve = path.match(/^\/v1\/sources\/([a-z0-9-]+)\/resolve\/(.+)\/?$/i);
       if (sourceResolve && request.method === "GET") {
         const sourceKey = sourceResolve[1]!;
         const sourceId = sourceResolve[2]!;
@@ -134,7 +134,7 @@ export default {
       }
 
       // Source download (auth required)
-      const sourceDownload = path.match(/^\/v1\/sources\/([a-z0-9-]+)\/download$/i);
+      const sourceDownload = path.match(/^\/v1\/sources\/([a-z0-9-]+)\/download\/?$/i);
       if (sourceDownload && request.method === "POST") {
         const sourceKey = sourceDownload[1]!;
         const source = SOURCES.get(sourceKey);
