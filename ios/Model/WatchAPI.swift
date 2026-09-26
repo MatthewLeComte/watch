@@ -16,6 +16,40 @@ struct WatchAPI: Sendable {
         return try JSONDecoder().decode(ItemList.self, from: data).items
     }
 
+    // MARK: - 67movies Source
+
+    /// Search 67movies by query string.
+    func sourceSearch(query: String) async throws -> [SourceSearchResult] {
+        let data = try await send(path: "v1/sources/67movies/search", method: "GET", query: [URLQueryItem(name: "q", value: query)])
+        return try JSONDecoder().decode([SourceSearchResult].self, from: data)
+    }
+
+    /// Search 67movies by IMDb ID.
+    func sourceSearchByImdb(imdbId: String) async throws -> [SourceSearchResult] {
+        let data = try await send(path: "v1/sources/67movies/search", method: "GET", query: [URLQueryItem(name: "imdb", value: imdbId)])
+        return try JSONDecoder().decode([SourceSearchResult].self, from: data)
+    }
+
+    /// Resolve a movie page to stream info (master playlist, qualities, subtitles).
+    func sourceResolve(id: String) async throws -> SourceStreamInfo {
+        let data = try await send(path: "v1/sources/67movies/resolve/\(id)", method: "GET")
+        return try JSONDecoder().decode(SourceStreamInfo.self, from: data)
+    }
+
+    /// Download the selected quality to the library.
+    func sourceDownload(stream: SourceStreamInfo, qualityHeight: Int, subtitleLang: String?) async throws -> Movie {
+        var obj: [String: Any] = [
+            "stream": stream.toDictionary(),
+            "quality": ["height": qualityHeight]
+        ]
+        if let subtitleLang { obj["subtitleLang"] = subtitleLang }
+        let body = try JSONSerialization.data(withJSONObject: obj)
+        let data = try await send(path: "v1/sources/67movies/download", method: "POST", body: body, contentType: "application/json")
+        return try JSONDecoder().decode(Movie.self, from: data)
+    }
+
+    // MARK: - Existing Methods
+
     func create(filename: String, byteSize: Int64) async throws -> (id: String, partSize: Int) {
         let body = try JSONSerialization.data(withJSONObject: [
             "filename": filename,
@@ -139,6 +173,78 @@ struct WatchAPI: Sendable {
             throw WatchError.server(message)
         }
         return data
+    }
+}
+
+// MARK: - 67movies Types
+
+struct SourceSearchResult: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var title: String
+    var year: Int?
+    var imdbId: String?
+    var poster: String?
+    var type: String
+
+    var displayTitle: String {
+        if let year { return "\(title) (\(year))" }
+        return title
+    }
+}
+
+struct SourceQuality: Codable, Hashable, Sendable, Identifiable {
+    var id: String { "\(height)" }
+    var height: Int
+    var bandwidth: Int
+    var codecs: String
+    var uri: String
+
+    var label: String {
+        "\(height)p • \(bandwidth / 1_000_000) Mbps"
+    }
+}
+
+struct SourceSubtitle: Codable, Hashable, Sendable, Identifiable {
+    var id: String { lang }
+    var lang: String
+    var label: String
+    var uri: String
+    var forced: Bool
+}
+
+struct SourceStreamInfo: Codable, Hashable, Sendable {
+    var id: String
+    var title: String
+    var year: Int?
+    var imdbId: String?
+    var poster: String?
+    var hlsUrl: String
+    var qualities: [SourceQuality]
+    var subtitles: [SourceSubtitle]
+
+    func toDictionary() -> [String: Any] {
+        [
+            "id": id,
+            "title": title,
+            "year": year ?? NSNull(),
+            "imdbId": imdbId ?? NSNull(),
+            "poster": poster ?? NSNull(),
+            "hlsUrl": hlsUrl,
+            "qualities": qualities.map { $0.toDictionary() },
+            "subtitles": subtitles.map { $0.toDictionary() }
+        ]
+    }
+}
+
+extension SourceQuality {
+    func toDictionary() -> [String: Any] {
+        ["height": height, "bandwidth": bandwidth, "codecs": codecs, "uri": uri]
+    }
+}
+
+extension SourceSubtitle {
+    func toDictionary() -> [String: Any] {
+        ["lang": lang, "label": label, "uri": uri, "forced": forced]
     }
 }
 

@@ -246,6 +246,28 @@ final class LibraryModel {
         try await media.subtitleFile(api: api, id: movie.id, lang: lang)
     }
 
+    // MARK: - 67movies Source
+
+    /// Search 67movies by query.
+    func sourceSearch(query: String) async throws -> [SourceSearchResult] {
+        try await api.sourceSearch(query: query)
+    }
+
+    /// Search 67movies by IMDb ID.
+    func sourceSearchByImdb(imdbId: String) async throws -> [SourceSearchResult] {
+        try await api.sourceSearchByImdb(imdbId: imdbId)
+    }
+
+    /// Resolve a movie page to stream info.
+    func sourceResolve(id: String) async throws -> SourceStreamInfo {
+        try await api.sourceResolve(id: id)
+    }
+
+    /// Download the selected quality to the library.
+    func sourceDownload(stream: SourceStreamInfo, qualityHeight: Int, subtitleLang: String?) async throws -> Movie {
+        try await api.sourceDownload(stream: stream, qualityHeight: qualityHeight, subtitleLang: subtitleLang)
+    }
+
     private func replace(_ movie: Movie) {
         if let index = movies.firstIndex(where: { $0.id == movie.id }) {
             movies[index] = movie

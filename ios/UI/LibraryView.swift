@@ -5,6 +5,7 @@ import AVFoundation
 struct LibraryView: View {
     @Environment(LibraryModel.self) private var library
     @State private var importing = false
+    @State private var showSourceSearch = false
     @State private var correcting: Movie?
     @State private var pendingImport: URL?
     @State private var pendingScoped = false
@@ -216,16 +217,54 @@ struct LibraryView: View {
 
     private var controls: some View {
         HStack { Spacer()
-            Button { importing = true } label: { Image(systemName: "plus").font(.system(size: 20, weight: .bold)).frame(width: 48, height: 48) }
-            .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Add a movie")
+            Menu {
+                Button {
+                    importing = true
+                } label: {
+                    Label("Import File", systemImage: "square.and.arrow.down")
+                }
+                Button {
+                    showSourceSearch = true
+                } label: {
+                    Label("Search 67movies", systemImage: "magnifyingglass")
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 20, weight: .bold))
+                    .frame(width: 48, height: 48)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("Add a movie")
         }.padding(.horizontal, 14).padding(.top, 6)
+        .sheet(isPresented: $showSourceSearch) {
+            SourceSearchView()
+        }
     }
 
     private var empty: some View {
         VStack(spacing: 18) {
             Text("WATCH").font(.system(size: 42, weight: .black)).tracking(2).foregroundStyle(Cinema.red)
             Text("Nothing here yet").font(.title2.weight(.bold))
-            Button { importing = true } label: { Label("Add a movie", systemImage: "plus").font(.headline.weight(.bold)).padding(.horizontal, 22).padding(.vertical, 12).background(.white, in: RoundedRectangle(cornerRadius: 4)).foregroundStyle(.black) }
+            VStack(spacing: 12) {
+                Button { importing = true } label: {
+                    Label("Import File", systemImage: "square.and.arrow.down")
+                        .font(.headline.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 8))
+                        .foregroundStyle(.black)
+                }
+                Button { showSourceSearch = true } label: {
+                    Label("Search 67movies", systemImage: "magnifyingglass")
+                        .font(.headline.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Cinema.red, in: RoundedRectangle(cornerRadius: 8))
+                        .foregroundStyle(.white)
+                }
+            }
+            .padding(.horizontal, 40)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black)
     }
 

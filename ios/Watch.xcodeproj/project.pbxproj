@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		022B2474B5D289B3C12B64E9 /* MediaStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 442915E81C5802819E608765 /* MediaStore.swift */; };
 		0BA4BE8C7BAF51DE108FDAE6 /* WatchAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3708D325F1E8ADFE6D579003 /* WatchAPI.swift */; };
+		3BEC08A1F61D4DB3E82FBDF9 /* SourceSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C829F3C0E53A0268E216E4 /* SourceSearchView.swift */; };
 		3E23C9BCE70415E58D0C3D34 /* DetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AC94FEF85F94880A61D92E /* DetailView.swift */; };
 		4F2ADE62DCA26E86392FE42B /* Data.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE5816F5CBA2A8EA4C6B9D8 /* Data.swift */; };
 		50895D5B823423C97D7DE99A /* Shell.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAFAA16304A4B7D917B073E3 /* Shell.swift */; };
@@ -28,6 +29,7 @@
 
 /* Begin PBXFileReference section */
 		08AC94FEF85F94880A61D92E /* DetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailView.swift; sourceTree = "<group>"; };
+		18C829F3C0E53A0268E216E4 /* SourceSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceSearchView.swift; sourceTree = "<group>"; };
 		250F1AB60706CF765ED8C7B3 /* PlayerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerModel.swift; sourceTree = "<group>"; };
 		3708D325F1E8ADFE6D579003 /* WatchAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAPI.swift; sourceTree = "<group>"; };
 		3F353788BC0C1986397351F9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -80,6 +82,7 @@
 				9EFF84F013A2FB48A35F48A1 /* LibraryView.swift */,
 				641AEECC5EA2130ACD7822D5 /* PlayerView.swift */,
 				F596F00590151A29BF28CC47 /* SettingsView.swift */,
+				18C829F3C0E53A0268E216E4 /* SourceSearchView.swift */,
 				DFCE39CA538A8AF959A22167 /* UI.swift */,
 			);
 			path = UI;
@@ -213,6 +216,7 @@
 				D7E800D88139C5ADDD92B1F6 /* PlayerView.swift in Sources */,
 				8C51842BA656799BFCDADCE5 /* SettingsView.swift in Sources */,
 				50895D5B823423C97D7DE99A /* Shell.swift in Sources */,
+				3BEC08A1F61D4DB3E82FBDF9 /* SourceSearchView.swift in Sources */,
 				F21325F58EC85D335094F605 /* UI.swift in Sources */,
 				0BA4BE8C7BAF51DE108FDAE6 /* WatchAPI.swift in Sources */,
 			);
