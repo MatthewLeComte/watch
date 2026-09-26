@@ -153,7 +153,7 @@ struct LibraryView: View {
             if let movie = heroMovie {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(movie.displayTitle)
-                        .font(.system(size: 30, weight: .heavy))
+                        .font(.system(size: isCompact ? 28 : 36, weight: .heavy))
                         .foregroundStyle(.white)
                         .lineLimit(2)
                     HStack(spacing: 10) {
@@ -177,12 +177,12 @@ struct LibraryView: View {
                             .font(.headline.weight(.bold))
                             .foregroundStyle(.black)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+                            .padding(.vertical, isCompact ? 12 : 16)
                             .background(.white, in: RoundedRectangle(cornerRadius: 6))
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, isCompact ? 20 : 32)
                 .padding(.vertical, 14)
                 .frame(width: width, height: infoH, alignment: .leading)
                 .background(Color.black)
@@ -209,25 +209,25 @@ struct LibraryView: View {
             Text(s.title)
                 .font(.title3.weight(.bold))
                 .foregroundStyle(.white)
-                .padding(.horizontal, 20)
+                .padding(.horizontal, isCompact ? 20 : 32)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(s.movies) { m in
                         VStack(alignment: .leading, spacing: 6) {
                             PosterImage(url: posters[m.id] ?? URL(string: m.thumbnailUrl ?? ""), title: m.displayTitle)
-                                .frame(width: cardW, height: cardH)
+                                .frame(width: cardWidth, height: cardHeight)
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
                             if s.id == "continue", let frac = continueFraction(m) {
                                 ProgressView(value: frac)
                                     .tint(.red)
-                                    .frame(width: cardW)
+                                    .frame(width: cardWidth)
                             }
                         }
                         .onTapGesture { play(m) }
                         .contextMenu { posterMenu(m) }
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, isCompact ? 20 : 32)
             }
             Spacer(minLength: 0)
         }
@@ -273,7 +273,7 @@ struct LibraryView: View {
             .buttonStyle(.glass)
             .buttonBorderShape(.circle)
             .accessibilityLabel("Add a movie")
-        }.padding(.horizontal, 14).padding(.top, 6)
+        }.padding(.horizontal, isCompact ? 14 : 24).padding(.top, 6)
         .sheet(isPresented: $showSourceSearch) {
             SourceSearchView()
         }

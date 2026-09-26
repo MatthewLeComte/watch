@@ -491,6 +491,10 @@ async function completeItem(env: Env, id: string): Promise<Response> {
   await env.watch.prepare("DELETE FROM upload WHERE movie_id = ?").bind(id).run();
   try {
     await ingest(env, id);
+    // Auto-resolve trailer in background (fire-and-forget)
+    resolveTrailerFile(env, id)
+      .then(r => console.log(`Auto trailer for ${id}: ${JSON.stringify(r.body)}`))
+      .catch(e => console.error(`Auto trailer failed for ${id}:`, e));
   } catch (err) {
     const note = err instanceof Error ? err.message : "ingest_failed";
     await env.watch
@@ -811,9 +815,14 @@ async function kinocheckTrailerId(imdbId: string): Promise<string | null> {
   const res = await fetch(`${KINOCHECK}?imdb_id=${encodeURIComponent(imdbId)}&language=en`, {
     headers: { "User-Agent": "Watch/1", Accept: "application/json" },
   });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    console.log(`Kinocheck returned ${res.status} for ${imdbId}`);
+    return null;
+  }
   const obj = (await res.json()) as { trailer?: TrailerVideo; videos?: TrailerVideo[] };
-  return pickTrailerId(obj);
+  const ytId = pickTrailerId(obj);
+  if (!ytId) console.log(`Kinocheck no trailer for ${imdbId}`);
+  return ytId;
 }
 
 type PipedStream = { fileUrl: string; quality: string };
@@ -824,7 +833,10 @@ async function pipedStream(env: Env, ytId: string): Promise<PipedStream | null> 
       const res = await fetch(`${base}/streams/${ytId}`, {
         headers: { "User-Agent": "Watch/1", Accept: "application/json" },
       });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        console.log(`Piped ${base} returned ${res.status} for ${ytId}`);
+        continue;
+      }
       const obj = (await res.json()) as {
         videoStreams?: Array<{ url?: string; quality?: string; codec?: string; mimeType?: string; format?: string }>;
       };
@@ -843,10 +855,12 @@ async function pipedStream(env: Env, ytId: string): Promise<PipedStream | null> 
       }
       cands.sort((a, b) => b.h - a.h);
       if (cands[0]) return { fileUrl: cands[0].url, quality: `${cands[0].h}p` };
-    } catch {
+    } catch (e) {
+      console.log(`Piped ${base} error for ${ytId}: ${e instanceof Error ? e.message : e}`);
       continue;
     }
   }
+  console.log(`All Piped instances failed for ${ytId}`);
   return null;
 }
 
@@ -875,11 +889,13 @@ async function resolveTrailerFile(env: Env, id: string): Promise<ResolveResult> 
   if (movie.trailer_status === "ready" && movie.trailer_r2_key && (await env.watch_bucket.head(movie.trailer_r2_key))) {
     return { http: 200, body: { ok: true, deduped: true } };
   }
+  console.log(`Resolving trailer for ${id}: imdb=${movie.imdb_id}, key=${movie.trailer_key}, status=${movie.trailer_status}`);
   const ytId = movie.trailer_key || (movie.imdb_id ? await kinocheckTrailerId(movie.imdb_id) : null);
   if (!ytId) {
     await markTrailer(env, id, { status: "failed", note: "no_trailer_found" });
     return { http: 404, body: { ok: false, error: "no_trailer_found" } };
   }
+  console.log(`Found YouTube ID ${ytId} for ${id}`);
   const key = `trailers/${ytId}.mp4`;
   if (await env.watch_bucket.head(key)) {
     const existing = await env.watch
@@ -900,6 +916,7 @@ async function resolveTrailerFile(env: Env, id: string): Promise<ResolveResult> 
     await markTrailer(env, id, { status: "failed", note: "no_hd_stream" });
     return { http: 502, body: { ok: false, error: "no_hd_stream" } };
   }
+  console.log(`Downloading trailer ${ytId} from ${stream.fileUrl} (${stream.quality})`);
   const up = await fetch(stream.fileUrl, { headers: { "User-Agent": "Watch/1" } });
   const ctype = up.headers.get("content-type") || "";
   const clen = Number(up.headers.get("content-length") || "0");
@@ -915,6 +932,7 @@ async function resolveTrailerFile(env: Env, id: string): Promise<ResolveResult> 
     return { http: 502, body: { ok: false, error: "too_small" } };
   }
   await markTrailer(env, id, { r2: key, bytes, quality: stream.quality, status: "ready" });
+  console.log(`Trailer ready for ${id}: ${bytes} bytes, ${stream.quality}`);
   return { http: 200, body: { ok: true, deduped: false, quality: stream.quality, bytes } };
 }
 
@@ -947,17 +965,17 @@ async function ensureTrailerSchema(env: Env): Promise<void> {
 
 async function backfillTrailers(request: Request, env: Env): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as { limit?: number };
-  const limit = Math.min(Math.max(Number(body.limit) || 3, 1), 10);
+  const limit = Math.min(Math.max(Number(body.limit) || 20, 1), 50);
   const rows = await env.watch
-    .prepare("SELECT id FROM movie WHERE trailer_status IS NULL OR trailer_status IN ('missing','failed') ORDER BY created_at ASC LIMIT ?")
+    .prepare("SELECT id, title, imdb_id, trailer_key, trailer_status FROM movie WHERE trailer_status IS NULL OR trailer_status IN ('missing','failed') ORDER BY created_at ASC LIMIT ?")
     .bind(limit)
-    .all<{ id: string }>();
+    .all<{ id: string; title: string; imdb_id: string | null; trailer_key: string | null; trailer_status: string | null }>();
   const results: Array<Record<string, unknown>> = [];
   for (const r of rows.results ?? []) {
     const out = await resolveTrailerFile(env, r.id);
-    results.push({ id: r.id, ...out.body });
+    results.push({ id: r.id, title: r.title, imdbId: r.imdb_id, trailerKey: r.trailer_key, prevStatus: r.trailer_status, ...out.body });
   }
-  return json({ ok: true, results });
+  return json({ ok: true, processed: results.length, results });
 }
 
 async function trailerFile(request: Request, env: Env, id: string): Promise<Response> {
