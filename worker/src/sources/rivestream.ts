@@ -9,14 +9,13 @@ const TMDB_BASE = "https://api.themoviedb.org/3";
 const TMDB_IMAGE = "https://image.tmdb.org/t/p/w500";
 
 function getTmdbHeaders(env: Env): HeadersInit {
-  // Prefer Bearer token (v4 auth), fallback to API key (v3 auth)
   const bearer = env.WATCH_TMDB_API_READ_ACCESS_TOKEN;
   const apiKey = env.WATCH_TMDB_API_KEY;
   if (bearer) {
     return { Authorization: `Bearer ${bearer}`, Accept: "application/json" };
   }
   if (apiKey) {
-    return { Accept: "application/json" }; // API key passed as query param
+    return { Accept: "application/json" };
   }
   return { Accept: "application/json" };
 }
@@ -26,6 +25,13 @@ function getTmdbApiKeyParam(env: Env): string | null {
   return apiKey ? `api_key=${apiKey}` : null;
 }
 
+function buildRiveStreamUrl(tmdbId: number, mediaType: "movie" | "tv", season?: number, episode?: number): string {
+  if (mediaType === "tv" && season !== undefined && episode !== undefined) {
+    return `${BASE}/watch?type=tv&id=${tmdbId}&season=${season}&episode=${episode}`;
+  }
+  return `${BASE}/watch?type=movie&id=${tmdbId}`;
+}
+
 export const sourceRiveStream: Source = {
   key: "rivestream",
   name: "RiveStream (TMDB + Headless)",
@@ -33,19 +39,41 @@ export const sourceRiveStream: Source = {
   async search(query: string, env: Env): Promise<SearchResult[]> {
     const apiKeyParam = getTmdbApiKeyParam(env);
     if (!apiKeyParam) return [];
-    const url = `${TMDB_BASE}/search/movie?${apiKeyParam}&query=${encodeURIComponent(query)}&language=en-US&include_adult=false`;
-    const res = await fetch(url, { headers: { ...getTmdbHeaders(env), "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
-    if (!res.ok) return [];
-    const data = await res.json() as { results: any[] };
     
-    return data.results.slice(0, 20).map(r => ({
-      id: `rivestream:${r.id}`,
-      title: r.title || "",
-      year: r.release_date ? Number(r.release_date.slice(0, 4)) : null,
-      imdbId: null,
-      poster: r.poster_path ? `${TMDB_IMAGE}${r.poster_path}` : null,
-      type: "movie" as const,
-    }));
+    const [movieRes, tvRes] = await Promise.all([
+      fetch(`${TMDB_BASE}/search/movie?${apiKeyParam}&query=${encodeURIComponent(query)}&language=en-US&include_adult=false`, 
+        { headers: { ...getTmdbHeaders(env), "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) }),
+      fetch(`${TMDB_BASE}/search/tv?${apiKeyParam}&query=${encodeURIComponent(query)}&language=en-US&include_adult=false`, 
+        { headers: { ...getTmdbHeaders(env), "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) })
+    ]);
+
+    const results: SearchResult[] = [];
+    
+    if (movieRes.ok) {
+      const movieData = await movieRes.json() as { results: any[] };
+      results.push(...movieData.results.slice(0, 10).map(r => ({
+        id: `rivestream:movie:${r.id}`,
+        title: r.title || "",
+        year: r.release_date ? Number(r.release_date.slice(0, 4)) : null,
+        imdbId: null,
+        poster: r.poster_path ? `${TMDB_IMAGE}${r.poster_path}` : null,
+        type: "movie" as const,
+      })));
+    }
+
+    if (tvRes.ok) {
+      const tvData = await tvRes.json() as { results: any[] };
+      results.push(...tvData.results.slice(0, 10).map(r => ({
+        id: `rivestream:tv:${r.id}`,
+        title: r.name || "",
+        year: r.first_air_date ? Number(r.first_air_date.slice(0, 4)) : null,
+        imdbId: null,
+        poster: r.poster_path ? `${TMDB_IMAGE}${r.poster_path}` : null,
+        type: "series" as const,
+      })));
+    }
+
+    return results.slice(0, 20);
   },
 
   async searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null> {
@@ -54,46 +82,45 @@ export const sourceRiveStream: Source = {
     const url = `${TMDB_BASE}/find/${imdbId}?${apiKeyParam}&external_source=imdb_id`;
     const res = await fetch(url, { headers: { ...getTmdbHeaders(env), "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return null;
-    const data = await res.json() as { movie_results?: any[] };
+    const data = await res.json() as { movie_results?: any[]; tv_results?: any[] };
     const movie = data.movie_results?.[0];
-    if (!movie) return null;
+    const tv = data.tv_results?.[0];
+    const item = movie || tv;
+    if (!item) return null;
     return {
-      id: `rivestream:${movie.id}`,
-      title: movie.title || "",
-      year: movie.release_date ? Number(movie.release_date.slice(0, 4)) : null,
+      id: `rivestream:${movie ? "movie" : "tv"}:${item.id}`,
+      title: item.title || item.name || "",
+      year: (item.release_date || item.first_air_date) ? Number((item.release_date || item.first_air_date).slice(0, 4)) : null,
       imdbId,
-      poster: movie.poster_path ? `${TMDB_IMAGE}${movie.poster_path}` : null,
-      type: "movie" as const,
+      poster: item.poster_path ? `${TMDB_IMAGE}${item.poster_path}` : null,
+      type: movie ? "movie" : "series",
     };
   },
 
   async resolve(env: Env, id: string): Promise<StreamInfo | null> {
-    // id format: "rivestream:TMDB_ID"
-    const tmdbIdStr = id.replace("rivestream:", "");
-    const tmdbId = Number(tmdbIdStr);
-    if (!tmdbId) return null;
+    const parts = id.replace("rivestream:", "").split(":");
+    const mediaType = parts[0] as "movie" | "tv";
+    const tmdbId = Number(parts[1]);
+    if (!tmdbId || !["movie", "tv"].includes(mediaType)) return null;
 
-    // Get full metadata from TMDB
     const apiKeyParam = getTmdbApiKeyParam(env);
     if (!apiKeyParam) return null;
-    const detailUrl = `${TMDB_BASE}/movie/${tmdbId}?${apiKeyParam}&language=en-US&append_to_response=external_ids`;
+    const detailUrl = `${TMDB_BASE}/${mediaType}/${tmdbId}?${apiKeyParam}&language=en-US&append_to_response=external_ids`;
     const res = await fetch(detailUrl, { headers: { ...getTmdbHeaders(env), "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return null;
     const detail = await res.json() as any;
 
     const imdbId = detail.external_ids?.imdb_id || null;
 
-    // RiveStream URL uses TMDB ID directly
-    const pageUrl = `${BASE}/watch?type=movie&id=${tmdbId}`;
+    const pageUrl = buildRiveStreamUrl(tmdbId, mediaType);
 
-    // Use headless browser to extract HLS
     const browserResult = await extractHlsFromRiveStream(env, pageUrl);
     if (!browserResult) return null;
 
     return {
       id,
-      title: browserResult.title || detail.title,
-      year: browserResult.year ?? (detail.release_date ? Number(detail.release_date.slice(0, 4)) : null),
+      title: browserResult.title || detail.name || detail.title,
+      year: browserResult.year ?? (detail.release_date || detail.first_air_date ? Number((detail.release_date || detail.first_air_date).slice(0, 4)) : null),
       imdbId,
       poster: browserResult.poster ?? (detail.poster_path ? `${TMDB_IMAGE}${detail.poster_path}` : null),
       hlsUrl: browserResult.hlsUrl,
@@ -181,111 +208,6 @@ export const sourceRiveStream: Source = {
   },
 };
 
-/** Extract HLS from RiveStream page using Cloudflare Browser Rendering. */
-async function extractHlsFromRiveStream(env: Env, pageUrl: string): Promise<{
-  hlsUrl: string;
-  qualities: Quality[];
-  subtitles: SubtitleTrack[];
-  title: string;
-  year: number | null;
-  poster: string | null;
-} | null> {
-  const browser = env.BROWSER;
-  if (!browser) {
-    console.log("Browser Rendering not available in env.BROWSER");
-    return null;
-  }
-
-  try {
-    const page = await browser.newPage();
-    
-    await page.setRequestInterception(true);
-    page.on('request', (req: any) => {
-      const resourceType = req.resourceType();
-      if (['image', 'stylesheet', 'font'].includes(resourceType)) {
-        req.abort();
-      } else {
-        req.continue();
-      }
-    });
-
-    await page.goto(pageUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-
-    // Wait for source selector to appear (indicates streams loaded)
-    await page.waitForSelector('#nonEmbedSourcesIndex, .serverSelect, [aria-label="Select Direct Server"]', { timeout: 15000 }).catch(() => {});
-
-    const result = await page.evaluate(() => {
-      // Try __NEXT_DATA__ first
-      const nextData = document.getElementById('__NEXT_DATA__');
-      if (nextData) {
-        try {
-          const data = JSON.parse(nextData.textContent || '{}');
-          const pageProps = data.props?.pageProps;
-          
-          // Look for stream sources
-          const sources = pageProps?.sources || pageProps?.servers || pageProps?.streams;
-          if (sources) {
-            return { sources, pageProps };
-          }
-        } catch { /* ignore */ }
-      }
-
-      // Fallback: scan for m3u8 in page
-      const m3u8Matches = document.body.innerHTML.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/g);
-      
-      // Check for player config
-      const scripts = document.querySelectorAll('script');
-      let playerConfig = null;
-      for (const script of scripts) {
-        const text = script.textContent || '';
-        if (text.includes('playerConfig') || text.includes('sources') || text.includes('servers')) {
-          const match = text.match(/(?:playerConfig|sources|servers)\s*[=:]\s*(\[[\s\S]*?\])/);
-          if (match) {
-            try { playerConfig = JSON.parse(match[1].replace(/'/g, '"')); } catch {}
-          }
-        }
-      }
-
-      return { m3u8: m3u8Matches, playerConfig };
-    });
-
-    await page.close();
-
-    let hlsUrl: string | null = null;
-    let title = "";
-    let poster: string | null = null;
-
-    if (result?.m3u8?.length) {
-      hlsUrl = result.m3u8[0];
-    } else if (result?.playerConfig?.sources) {
-      const hlsSource = result.playerConfig.sources.find((s: any) => s.file?.includes('.m3u8') || s.type === 'application/x-mpegURL');
-      hlsUrl = hlsSource?.file;
-    } else if (result?.sources) {
-      const hlsSource = result.sources.find((s: any) => s.file?.includes('.m3u8') || s.url?.includes('.m3u8') || s.type === 'application/x-mpegURL');
-      hlsUrl = hlsSource?.file || hlsSource?.url;
-    }
-
-    if (!hlsUrl) return null;
-
-    const masterRes = await fetch(hlsUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
-    if (!masterRes.ok) return null;
-    const masterText = await masterRes.text();
-    const { qualities, subtitles } = parseMasterPlaylist(masterText, hlsUrl);
-
-    return {
-      hlsUrl,
-      qualities,
-      subtitles,
-      title: "",
-      year: null,
-      poster: null,
-    };
-  } catch (err) {
-    console.log("RiveStream browser rendering error:", err);
-    return null;
-  }
-}
-
 async function completeHlsUpload(env: Env, id: string, size: number, segments: number): Promise<void> {
   const row = await env.watch.prepare("SELECT upload_id, parts_json FROM upload WHERE movie_id = ?").bind(id).first<{ upload_id: string; parts_json: string }>();
   if (!row) throw new Error("no_upload");
@@ -354,4 +276,103 @@ function parseMediaPlaylist(text: string, baseUrl: string): string[] {
     .map(l => l.trim())
     .filter(l => l && !l.startsWith("#"))
     .map(l => l.startsWith("http") ? l : new URL(l, baseUrl).href);
+}
+
+async function extractHlsFromRiveStream(env: Env, pageUrl: string): Promise<{
+  hlsUrl: string;
+  qualities: Quality[];
+  subtitles: SubtitleTrack[];
+  title: string;
+  year: number | null;
+  poster: string | null;
+} | null> {
+  const browser = env.BROWSER;
+  if (!browser) {
+    console.log("Browser Rendering not available in env.BROWSER");
+    return null;
+  }
+
+  try {
+    const page = await browser.newPage();
+    
+    await page.setRequestInterception(true);
+    page.on('request', (req: any) => {
+      const resourceType = req.resourceType();
+      if (['image', 'stylesheet', 'font'].includes(resourceType)) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
+    await page.goto(pageUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+
+    await page.waitForSelector('#nonEmbedSourcesIndex, .serverSelect, [aria-label="Select Direct Server"]', { timeout: 15000 }).catch(() => {});
+
+    const result = await page.evaluate(() => {
+      const nextData = document.getElementById('__NEXT_DATA__');
+      if (nextData) {
+        try {
+          const data = JSON.parse(nextData.textContent || '{}');
+          const pageProps = data.props?.pageProps;
+          
+          const sources = pageProps?.sources || pageProps?.servers || pageProps?.streams;
+          if (sources) {
+            return { sources, pageProps };
+          }
+        } catch { /* ignore */ }
+      }
+
+      const m3u8Matches = document.body.innerHTML.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/g);
+      
+      const scripts = document.querySelectorAll('script');
+      let playerConfig = null;
+      for (const script of scripts) {
+        const text = script.textContent || '';
+        if (text.includes('playerConfig') || text.includes('sources') || text.includes('servers')) {
+          const match = text.match(/(?:playerConfig|sources|servers)\s*[=:]\s*(\[[\s\S]*?\])/);
+          if (match) {
+            try { playerConfig = JSON.parse(match[1].replace(/'/g, '"')); } catch {}
+          }
+        }
+      }
+
+      return { m3u8: m3u8Matches, playerConfig };
+    });
+
+    await page.close();
+
+    let hlsUrl: string | null = null;
+    let title = "";
+    let poster: string | null = null;
+
+    if (result?.m3u8?.length) {
+      hlsUrl = result.m3u8[0];
+    } else if (result?.playerConfig?.sources) {
+      const hlsSource = result.playerConfig.sources.find((s: any) => s.file?.includes('.m3u8') || s.type === 'application/x-mpegURL');
+      hlsUrl = hlsSource?.file;
+    } else if (result?.sources) {
+      const hlsSource = result.sources.find((s: any) => s.file?.includes('.m3u8') || s.url?.includes('.m3u8') || s.type === 'application/x-mpegURL');
+      hlsUrl = hlsSource?.file || hlsSource?.url;
+    }
+
+    if (!hlsUrl) return null;
+
+    const masterRes = await fetch(hlsUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+    if (!masterRes.ok) return null;
+    const masterText = await masterRes.text();
+    const { qualities, subtitles } = parseMasterPlaylist(masterText, hlsUrl);
+
+    return {
+      hlsUrl,
+      qualities,
+      subtitles,
+      title: "",
+      year: null,
+      poster: null,
+    };
+  } catch (err) {
+    console.log("RiveStream browser rendering error:", err);
+    return null;
+  }
 }
