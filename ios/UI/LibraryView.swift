@@ -79,7 +79,8 @@ struct LibraryView: View {
     private var home: some View {
         GeometryReader { geo in
             let w = geo.size.width, h = geo.size.height
-            let videoH = min(w * 9 / 16, isCompact ? h * 0.4 : h * 0.35)
+            let maxVideoH = isCompact ? h * 0.4 : min(w * 9 / 16, 450)
+            let videoH = isCompact ? h * 0.4 : min(w * 9 / 16, 450)
             let infoH: CGFloat = isCompact ? 160 : 140
             let heroH = videoH + infoH
             let pageH = max(200, h - heroH)
