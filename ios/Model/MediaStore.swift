@@ -1,8 +1,10 @@
 import Foundation
+import AVFoundation
 
 actor MediaStore {
     private var playerWaiters = 0
     private var flights: [String: Task<Void, Never>] = [:]
+    private var downloadSessions: [String: HLSDownloadSession] = [:]
 
     func fraction(id: String, byteSize: Int64) -> Double {
         guard let index = try? loadIndex(id: id, byteSize: byteSize) else { return 0 }
@@ -12,6 +14,9 @@ actor MediaStore {
     }
 
     func playableFile(_ movie: Movie) -> URL? {
+        // Check for native HLS download first
+        if let hlsFile = try? hlsPlayableFile(movie.id) { return hlsFile }
+        // Fallback to byte-range file
         guard isComplete(id: movie.id, byteSize: movie.byteSize) else { return nil }
         return try? directory(id: movie.id).appendingPathComponent("movie.\(movie.ext)")
     }
@@ -42,6 +47,40 @@ actor MediaStore {
         return stream
     }
 
+    /// Native HLS background download using AVAssetDownloadURLSession
+    func downloadHLS(api: WatchAPI, movie: Movie, hlsURL: URL) async throws -> URL {
+        let session = HLSDownloadSession(movieID: movie.id, mediaStore: self)
+        downloadSessions[movie.id] = session
+
+        let asset = AVURLAsset(url: hlsURL)
+        let config = URLSessionConfiguration.background(withIdentifier: "com.watch.hls.\(movie.id)")
+        config.isDiscretionary = false
+        config.sessionSendsLaunchEvents = true
+        let downloadSession = AVAssetDownloadURLSession(configuration: config, assetDownloadDelegate: session, delegateQueue: OperationQueue.main)
+
+        let task = downloadSession.makeAssetDownloadTask(asset: asset, assetTitle: movie.title, assetArtworkData: nil, options: nil)!
+        session.task = task
+        task.resume()
+
+        // Wait for completion
+        return try await session.completion()
+    }
+
+    func cancelHLSDownload(id: String) {
+        downloadSessions[id]?.cancel()
+        downloadSessions[id] = nil
+    }
+
+    func hlsDownloadProgress(id: String) -> Double? {
+        downloadSessions[id]?.progress
+    }
+
+    func hlsPlayableFile(_ id: String) throws -> URL? {
+        let file = try directory(id: id).appendingPathComponent("hls.movpkg")
+        if FileManager.default.fileExists(atPath: file.path) { return file }
+        return nil
+    }
+
     func cancelPrefetch(id: String) {
         flights[id]?.cancel()
         flights[id] = nil
@@ -50,6 +89,8 @@ actor MediaStore {
     func remove(id: String) throws {
         flights[id]?.cancel()
         flights[id] = nil
+        downloadSessions[id]?.cancel()
+        downloadSessions[id] = nil
         let folder = try directory(id: id)
         try FileManager.default.removeItem(at: folder)
     }
@@ -169,6 +210,72 @@ actor MediaStore {
     private func save(_ index: LocalIndex, id: String) throws {
         let data = try JSONEncoder().encode(index)
         try data.write(to: try indexURL(id: id), options: .atomic)
+    }
+}
+
+// MARK: - HLS Download Session
+
+final class HLSDownloadSession: NSObject, AVAssetDownloadDelegate {
+    let movieID: String
+    let mediaStore: MediaStore
+    var task: AVAssetDownloadTask?
+    var continuation: CheckedContinuation<URL, Error>?
+    var progress: Double = 0
+
+    init(movieID: String, mediaStore: MediaStore) {
+        self.movieID = movieID
+        self.mediaStore = mediaStore
+        super.init()
+    }
+
+    func completion() async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func cancel() {
+        task?.cancel()
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
+    }
+
+    // MARK: - AVAssetDownloadDelegate
+
+    nonisolated func assetDownloadTask(_: AVAssetDownloadTask, didLoad timeRange: CMTimeRange, totalTimeRangesLoaded loadedTimeRanges: [NSValue], timeRangeExpectedToLoad: CMTimeRange) {
+        let loaded = loadedTimeRanges.reduce(0.0) { $0 + $1.timeRangeValue.duration.seconds }
+        let total = timeRangeExpectedToLoad.duration.seconds
+        Task { @MainActor in
+            self.progress = total > 0 ? min(1, loaded / total) : 0
+        }
+    }
+
+    nonisolated func assetDownloadTask(_: AVAssetDownloadTask, didFinishDownloadingTo location: URL) {
+        Task { @MainActor in
+            // Move the downloaded .movpkg to our media directory
+            do {
+                let dest = try await self.mediaStore.directory(id: self.movieID).appendingPathComponent("hls.movpkg")
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    try FileManager.default.removeItem(at: dest)
+                }
+                try FileManager.default.moveItem(at: location, to: dest)
+                self.continuation?.resume(returning: dest)
+            } catch {
+                self.continuation?.resume(throwing: error)
+            }
+            self.continuation = nil
+            self.task = nil
+        }
+    }
+
+    nonisolated func assetDownloadTask(_: AVAssetDownloadTask, didCompleteWith error: Error?) {
+        if let error {
+            Task { @MainActor in
+                self.continuation?.resume(throwing: error)
+                self.continuation = nil
+                self.task = nil
+            }
+        }
     }
 }
 
