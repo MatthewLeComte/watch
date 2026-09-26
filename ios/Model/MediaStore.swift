@@ -81,6 +81,11 @@ actor MediaStore {
         return nil
     }
 
+    // Expose directory for HLS download session
+    func hlsDirectory(id: String) throws -> URL {
+        try directory(id: id)
+    }
+
     func cancelPrefetch(id: String) {
         flights[id]?.cancel()
         flights[id] = nil
@@ -254,7 +259,7 @@ final class HLSDownloadSession: NSObject, AVAssetDownloadDelegate {
         Task { @MainActor in
             // Move the downloaded .movpkg to our media directory
             do {
-                let dest = try await self.mediaStore.directory(id: self.movieID).appendingPathComponent("hls.movpkg")
+                let dest = try await self.mediaStore.hlsDirectory(id: self.movieID).appendingPathComponent("hls.movpkg")
                 if FileManager.default.fileExists(atPath: dest.path) {
                     try FileManager.default.removeItem(at: dest)
                 }

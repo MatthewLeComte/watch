@@ -11,98 +11,7 @@ struct DetailView: View {
     var body: some View {
         Group {
             if let movie {
-                GeometryReader { geo in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ZStack(alignment: .bottomLeading) {
-                                PosterImage(url: poster ?? URL(string: movie.thumbnailUrl ?? ""), title: movie.displayTitle)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: max(200, min(geo.size.height * 0.2, 320)))
-                                    .clipped()
-                                LinearGradient(colors: [.clear, .black], startPoint: .center, endPoint: .bottom)
-                                Text(movie.displayTitle)
-                                    .font(.system(size: 40, weight: .heavy))
-                                    .foregroundStyle(.white)
-                                    .padding(20)
-                            }
-                            .frame(maxWidth: .infinity)
-                            VStack(alignment: .leading, spacing: 18) {
-                                Text(meta(movie))
-                                    .foregroundStyle(Cinema.mute)
-                                if !movie.overview.isEmpty {
-                                    Text(movie.overview)
-                                        .foregroundStyle(Cinema.ink.opacity(0.9))
-                                }
-                                if movie.matchSource != "manual", !movie.matchNote.isEmpty {
-                                    Text(movie.matchNote)
-                                        .font(.footnote)
-                                        .foregroundStyle(Cinema.mute)
-                                }
-                                HStack(spacing: 12) {
-                                    Button {
-                                        playMovie = movie
-                                    } label: {
-                                        Label("Play", systemImage: "play.fill")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .tint(.white)
-                                    .foregroundStyle(.black)
-                                    Button {
-                                        library.download(movie)
-                                    } label: {
-                                        Label(downloadLabel(movie), systemImage: "arrow.down")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .disabled((library.fractions[movie.id] ?? 0) >= 0.999)
-                                }
-                                if let progress = library.downloading[movie.id] {
-                                    ProgressView(value: progress) {
-                                        Text("Saving \(byteText(Int64(progress * Double(movie.byteSize)))) of \(byteText(movie.byteSize))")
-                                            .font(.caption)
-                                            .foregroundStyle(Cinema.mute)
-                                    }
-                                    .tint(Cinema.red)
-                                    Text("Keep Watch open to finish saving.")
-                                        .font(.caption)
-                                        .foregroundStyle(Cinema.mute)
-                                }
-                                if (library.fractions[movie.id] ?? 0) >= 0.999 {
-                                    Button("Remove download from this device") {
-                                        Task { await library.removeLocal(movie) }
-                                    }
-                                    .font(.footnote)
-                                    .foregroundStyle(Cinema.mute)
-                                }
-                                if !movie.subtitles.isEmpty {
-                                    Text("Subtitles")
-                                        .font(.headline)
-                                        .foregroundStyle(Cinema.ink)
-                                    ForEach(movie.subtitles) { track in
-                                        HStack {
-                                            Text(track.label)
-                                            if track.source == "opensubtitles" {
-                                                Text("This version")
-                                                    .font(.caption.weight(.semibold))
-                                                    .padding(.horizontal, 8)
-                                                    .padding(.vertical, 3)
-                                                    .background(Cinema.red.opacity(0.35), in: Capsule())
-                                            }
-                                            Spacer()
-                                            Text(track.lang.uppercased())
-                                                .foregroundStyle(Cinema.mute)
-                                        }
-                                        .foregroundStyle(Cinema.ink)
-                                    }
-                                }
-                            }
-                            .padding(20)
-                        }
-                    }
-                    .background(Color.black.ignoresSafeArea())
-                    .navigationTitle(movie.displayTitle)
-                    .modifier(FullScreenPlayer(movie: $playMovie))
+                content(for: movie)
             } else {
                 ContentUnavailableView("Movie removed", systemImage: "film")
             }
@@ -111,6 +20,103 @@ struct DetailView: View {
             if let movie {
                 poster = await library.posterURL(for: movie.id)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func content(for movie: Movie) -> some View {
+        GeometryReader { geo in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ZStack(alignment: .bottomLeading) {
+                        PosterImage(url: poster ?? URL(string: movie.thumbnailUrl ?? ""), title: movie.displayTitle)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: max(200, min(geo.size.height * 0.2, 320)))
+                            .clipped()
+                        LinearGradient(colors: [.clear, .black], startPoint: .center, endPoint: .bottom)
+                        Text(movie.displayTitle)
+                            .font(.system(size: 40, weight: .heavy))
+                            .foregroundStyle(.white)
+                            .padding(20)
+                    }
+                    .frame(maxWidth: .infinity)
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text(meta(movie))
+                            .foregroundStyle(Cinema.mute)
+                        if !movie.overview.isEmpty {
+                            Text(movie.overview)
+                                .foregroundStyle(Cinema.ink.opacity(0.9))
+                        }
+                        if movie.matchSource != "manual", !movie.matchNote.isEmpty {
+                            Text(movie.matchNote)
+                                .font(.footnote)
+                                .foregroundStyle(Cinema.mute)
+                        }
+                        HStack(spacing: 12) {
+                            Button {
+                                playMovie = movie
+                            } label: {
+                                Label("Play", systemImage: "play.fill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.white)
+                            .foregroundStyle(.black)
+                            Button {
+                                library.download(movie)
+                            } label: {
+                                Label(downloadLabel(movie), systemImage: "arrow.down")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled((library.fractions[movie.id] ?? 0) >= 0.999)
+                        }
+                        if let progress = library.downloading[movie.id] {
+                            ProgressView(value: progress) {
+                                Text("Saving \(byteText(Int64(progress * Double(movie.byteSize)))) of \(byteText(movie.byteSize))")
+                                    .font(.caption)
+                                    .foregroundStyle(Cinema.mute)
+                            }
+                            .tint(Cinema.red)
+                            Text("Keep Watch open to finish saving.")
+                                .font(.caption)
+                                .foregroundStyle(Cinema.mute)
+                        }
+                        if (library.fractions[movie.id] ?? 0) >= 0.999 {
+                            Button("Remove download from this device") {
+                                Task { await library.removeLocal(movie) }
+                            }
+                            .font(.footnote)
+                            .foregroundStyle(Cinema.mute)
+                        }
+                        if !movie.subtitles.isEmpty {
+                            Text("Subtitles")
+                                .font(.headline)
+                                .foregroundStyle(Cinema.ink)
+                            ForEach(movie.subtitles) { track in
+                                HStack {
+                                    Text(track.label)
+                                    if track.source == "opensubtitles" {
+                                        Text("This version")
+                                            .font(.caption.weight(.semibold))
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(Cinema.red.opacity(0.35), in: Capsule())
+                                    }
+                                    Spacer()
+                                    Text(track.lang.uppercased())
+                                        .foregroundStyle(Cinema.mute)
+                                }
+                                .foregroundStyle(Cinema.ink)
+                            }
+                        }
+                    }
+                    .padding(20)
+                }
+            }
+            .background(Color.black.ignoresSafeArea())
+            .navigationTitle(movie.displayTitle)
+            .modifier(FullScreenPlayer(movie: $playMovie))
         }
     }
 
