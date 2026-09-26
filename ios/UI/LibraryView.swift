@@ -4,6 +4,8 @@ import AVFoundation
 
 struct LibraryView: View {
     @Environment(LibraryModel.self) private var library
+    @Environment(\.horizontalSizeClass) private var hSize
+    @Environment(\.verticalSizeClass) private var vSize
     @State private var importing = false
     @State private var showSourceSearch = false
     @State private var correcting: Movie?
@@ -15,6 +17,13 @@ struct LibraryView: View {
     @State private var playing: Movie?
     @State private var streamTrailers: [String: URL] = [:]
 
+    private var isCompact: Bool { hSize == .compact }
+    private var isRegular: Bool { hSize == .regular }
+
+    /// Adaptive card width: ~150pt on iPhone, ~180pt on iPad/Mac
+    private var cardWidth: CGFloat { isCompact ? 150 : 180 }
+    private var cardHeight: CGFloat { cardWidth * 1.5 }
+
     /// Hero trailer: server HD file wins; else resolve direct MP4
     /// (Kinocheck match → Piped stream URL), streamed natively.
     private var heroStreamURL: URL? {
@@ -23,17 +32,14 @@ struct LibraryView: View {
         return streamTrailers[movie.id]
     }
 
-    private let cardW: CGFloat = 150
-    private let cardH: CGFloat = 225
-
     var body: some View {
         NavigationStack {
             ZStack(alignment: .top) {
                 Color.black.ignoresSafeArea()
                 if library.movies.isEmpty { empty } else { home }
-                controls
+                if isCompact { controls }
             }
-            .toolbar { }
+            .toolbar { if !isCompact { controls } }
             .navigationDestination(for: Movie.self) { DetailView(movieID: $0.id) }
             .sheet(item: $correcting) { CorrectMatchView(movie: $0) }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.mpeg4Movie, .quickTimeMovie, .movie], allowsMultipleSelection: true) { handleImport($0) }
@@ -47,6 +53,7 @@ struct LibraryView: View {
             .task { await loadPosters() }
             .task(id: heroMovie?.id) { await resolveStreamTrailer() }
         }
+        .navigationSplitViewStyle(.balanced)
     }
 
     private var shelves: [Shelf] {
@@ -72,28 +79,58 @@ struct LibraryView: View {
     private var home: some View {
         GeometryReader { geo in
             let w = geo.size.width, h = geo.size.height
-            let videoH = w * 9 / 16
-            let infoH: CGFloat = 190
+            let videoH = min(w * 9 / 16, isCompact ? h * 0.4 : h * 0.35)
+            let infoH: CGFloat = isCompact ? 160 : 140
             let heroH = videoH + infoH
             let pageH = max(200, h - heroH)
-            VStack(spacing: 0) {
-                billboard(width: w, videoH: videoH, infoH: infoH)
-                    .frame(width: w, height: heroH)
-                ScrollView(.vertical) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(shelves) { shelf in
-                            shelfRow(shelf, pageH: pageH)
-                                .containerRelativeFrame(.vertical)
-                                .id(shelf.id)
-                        }
-                    }
-                    .scrollTargetLayout()
+
+            if isRegular && !isCompact {
+                NavigationSplitView {
+                    sidebar(shelves: shelves, pageH: pageH)
+                        .navigationTitle("Library")
+                } detail: {
+                    detailContent(w: w, h: h, videoH: videoH, infoH: infoH, heroH: heroH, pageH: pageH)
                 }
-                .scrollTargetBehavior(.paging)
-                .scrollPosition(id: $shelfID)
-                .scrollIndicators(.hidden)
-                .frame(height: pageH)
+            } else {
+                detailContent(w: w, h: h, videoH: videoH, infoH: infoH, heroH: heroH, pageH: pageH)
             }
+        }
+    }
+
+    private func sidebar(shelves: [Shelf], pageH: CGFloat) -> some View {
+        List(shelves, selection: $shelfID) { shelf in
+            NavigationLink(value: shelf.id) {
+                Text(shelf.title)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+            }
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(Color.black)
+        .frame(minWidth: 260, idealWidth: 300, maxWidth: 350)
+    }
+
+    private func detailContent(w: CGFloat, h: CGFloat, videoH: CGFloat, infoH: CGFloat, heroH: CGFloat, pageH: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            billboard(width: w, videoH: videoH, infoH: infoH)
+                .frame(width: w, height: heroH)
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 0) {
+                    ForEach(shelves) { shelf in
+                        shelfRow(shelf, pageH: pageH)
+                            .containerRelativeFrame(.vertical)
+                            .id(shelf.id)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $shelfID)
+            .scrollIndicators(.hidden)
+            .frame(height: pageH)
         }
     }
 

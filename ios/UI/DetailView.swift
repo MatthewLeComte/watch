@@ -11,20 +11,21 @@ struct DetailView: View {
     var body: some View {
         Group {
             if let movie {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ZStack(alignment: .bottomLeading) {
-                            PosterImage(url: poster ?? URL(string: movie.thumbnailUrl ?? ""), title: movie.displayTitle)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 460)
-                                .clipped()
-                            LinearGradient(colors: [.clear, .black], startPoint: .center, endPoint: .bottom)
-                            Text(movie.displayTitle)
-                                .font(.system(size: 40, weight: .heavy))
-                                .foregroundStyle(.white)
-                                .padding(20)
-                        }
-                        .frame(maxWidth: .infinity)
+                GeometryReader { geo in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ZStack(alignment: .bottomLeading) {
+                                PosterImage(url: poster ?? URL(string: movie.thumbnailUrl ?? ""), title: movie.displayTitle)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: max(200, min(geo.size.height * 0.2, 320)))
+                                    .clipped()
+                                LinearGradient(colors: [.clear, .black], startPoint: .center, endPoint: .bottom)
+                                Text(movie.displayTitle)
+                                    .font(.system(size: 40, weight: .heavy))
+                                    .foregroundStyle(.white)
+                                    .padding(20)
+                            }
+                            .frame(maxWidth: .infinity)
                         VStack(alignment: .leading, spacing: 18) {
                         Text(meta(movie))
                             .foregroundStyle(Cinema.mute)
