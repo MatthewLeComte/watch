@@ -43,5 +43,6 @@
       "binding": "watch_bucket",
       "bucket_name": "watch"
     }
-  ]
+  ],
+  "browser": { "binding": "BROWSER" }
 }
