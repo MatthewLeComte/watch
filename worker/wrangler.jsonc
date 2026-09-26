@@ -7,7 +7,7 @@
   "workers_dev": false,
   "preview_urls": false,
   "build": {
-    "command": "node tools/code-ship-only.mjs",
+    "command": "npm run typecheck",
     "watch_dir": "src"
   },
   "observability": { "enabled": true },
