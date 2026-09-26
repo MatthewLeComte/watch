@@ -8,8 +8,6 @@ export interface Env {
   WATCH_PUBLIC_KEY: StoreSecret;
   /** Secrets Store binding: private secret for the Roku channel. */
   WATCH_PRIVATE_KEY: StoreSecret;
-  /** Comma-separated device UUIDs allowed. Empty = allow any device with valid keypair. */
-  ROKU_ALLOWED_DEVICES?: string;
   OPENSUBTITLES_API_KEY?: string;
   /** Comma-separated Piped API base URLs for trailer resolution. Empty = built-in defaults. */
   TRAILER_RESOLVER?: string;

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build script for the Roku app.
-# Injects WATCH_PUBLIC_KEY / WATCH_PRIVATE_KEY into a staging copy of Config.brs, then zips.
+# Injects WATCH_PUBLIC_KEY / WATCH_PRIVATE_KEY into a staging copy of Auth.brs, then zips.
 # Source tree is never mutated, so the key can't leak into git.
 set -euo pipefail
 
@@ -25,7 +25,7 @@ STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 cp -r manifest source components images "$STAGE/"
 
-python3 - "$STAGE/source/Config.brs" "$WATCH_PUBLIC_KEY" "$WATCH_PRIVATE_KEY" <<'EOF'
+python3 - "$STAGE/source/Auth.brs" "$WATCH_PUBLIC_KEY" "$WATCH_PRIVATE_KEY" <<'EOF'
 import sys
 path, pub, priv = sys.argv[1], sys.argv[2], sys.argv[3]
 src = open(path).read()

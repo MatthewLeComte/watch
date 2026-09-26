@@ -1,18 +1,17 @@
 # Roku
 
-Checkout: `/Users/matthew/Developer/GitHub/roku`  
-GitHub: `MatthewLeComte/roku`  
+Checkout: `/Users/matthew/Developer/GitHub/watch/roku`  
+GitHub: `MatthewLeComte/watch`  
 Channel: `Watch` (private, sideloaded)
 
-Target: Roku TV, SceneGraph, FHD (`ui_resolutions=fhd`). No HLS, no subtitles, no auth — direct MP4 from the `watch` worker. Built for the home network; do not expose to the public internet without a real auth layer on the worker.
+Target: Roku TV, SceneGraph, FHD (`ui_resolutions=fhd`). No HLS, no subtitles — direct MP4 from the `watch` worker. Single shared secret baked into app.zip at build time.
 
 ## Build
 
-Roku apps are a zipped directory. No build step, no npm.
-
 ```
-cd /Users/matthew/Developer/GitHub/roku
-zip -r app.zip manifest source components -x "*.DS_Store"
+cd /Users/matthew/Developer/GitHub/watch/roku
+export ROKU_SHARED_SECRET="<generate once, keep in password manager>"
+./build.sh
 ```
 
 Sideload into Developer Mode (Settings → System → Advanced system settings → Developer settings on the device):
@@ -23,7 +22,7 @@ curl -F "archive=@app.zip" http://<roku-ip>/plugin_install
 
 ## Data sources
 
-All four are public on the `watch` worker (no `WATCH_KEY` required).
+Roku endpoints require the shared secret header (injected by app):
 
 | Endpoint | Use |
 |----------|-----|
@@ -50,6 +49,5 @@ The app uses a single `MainScene` with three view groups (`grid`, `detail`, `pla
 - Resume / watched-state tracking.
 - HLS / adaptive bitrate.
 - Subtitle tracks.
-- Auth on the catalog or media endpoints.
 - Channel icon and splash screen branding.
 - Player controls overlay (uses the default `Video` overlay).

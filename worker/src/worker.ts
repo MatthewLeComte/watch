@@ -109,25 +109,25 @@ export default {
       if (!q) return json({ error: "query_required" }, 400);
       return json(await search67movies(q));
     }
-    const sourceResolve = path.match(/^\/v1\/sources\/67movies\/resolve\/(\d+)$/i);
-    if (sourceResolve && request.method === "GET") {
-      if (!authorized(request, env.WATCH_KEY || "")) return json({ error: "unauthorized" }, 401);
-      return json(await resolveMovie(env, sourceResolve[1]!) ?? { error: "not_found" }, 404);
-    }
-    const sourceDownload = path.match(/^\/v1\/sources\/67movies\/download$/i);
-    if (sourceDownload && request.method === "POST") {
-      if (!authorized(request, env.WATCH_KEY || "")) return json({ error: "unauthorized" }, 401);
-      const body = (await request.json()) as { stream: StreamInfo; quality?: { height: number }; subtitleLang?: string };
-      const stream = body.stream;
-      if (!stream?.hlsUrl) return json({ error: "stream_required" }, 400);
-      const quality = stream.qualities.find(q => q.height === (body.quality?.height ?? stream.qualities[0]?.height)) ?? stream.qualities[0];
-      const subtitle = body.subtitleLang ? stream.subtitles.find(s => s.lang === body.subtitleLang) : undefined;
-      const id = await downloadAndIngest(env, stream, quality, subtitle);
-      return json({ id }, 201);
-    }
 
     if (!authorized(request, env.WATCH_KEY || "")) return json({ error: "unauthorized" }, 401);
     try {
+      // 67movies source endpoints (auth required)
+      const sourceResolve = path.match(/^\/v1\/sources\/67movies\/resolve\/(\d+)$/i);
+      if (sourceResolve && request.method === "GET") {
+        return json(await resolveMovie(env, sourceResolve[1]!) ?? { error: "not_found" }, 404);
+      }
+      const sourceDownload = path.match(/^\/v1\/sources\/67movies\/download$/i);
+      if (sourceDownload && request.method === "POST") {
+        const body = (await request.json()) as { stream: StreamInfo; quality?: { height: number }; subtitleLang?: string };
+        const stream = body.stream;
+        if (!stream?.hlsUrl) return json({ error: "stream_required" }, 400);
+        const quality = stream.qualities.find(q => q.height === (body.quality?.height ?? stream.qualities[0]?.height)) ?? stream.qualities[0];
+        const subtitle = body.subtitleLang ? stream.subtitles.find(s => s.lang === body.subtitleLang) : undefined;
+        const id = await downloadAndIngest(env, stream, quality, subtitle);
+        return json({ id }, 201);
+      }
+
       if (request.method === "GET" && path === "/v1/items") return listItems(env);
       if (request.method === "POST" && path === "/v1/items") return createItem(request, env);
       if (path === "/v1/items/all/rematch" && request.method === "POST") return rematchAll(env);
@@ -169,18 +169,13 @@ function authorized(request: Request, key: string): boolean {
   return n === 0;
 }
 
-/** Validate Roku app request: public key ID + private secret + device ID.
- * Secrets come from Secrets Store (cached per isolate); any failure denies. */
+/** Validate Roku app request: public key ID + private secret. */
 async function rokuAuthorized(request: Request, env: Env): Promise<boolean> {
   const secrets = await rokuSecrets(env);
   if (!secrets) return false;
   const keyId = request.headers.get("x-key-id") || "";
   const apiKey = request.headers.get("x-api-key") || "";
-  const deviceId = request.headers.get("x-device-id") || "";
-  if (!deviceId) return false;
   if (!constantTimeEqual(keyId, secrets.pub) || !constantTimeEqual(apiKey, secrets.priv)) return false;
-  const allowed = (env.ROKU_ALLOWED_DEVICES || "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (allowed.length > 0 && !allowed.includes(deviceId)) return false;
   return true;
 }
 
