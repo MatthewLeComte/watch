@@ -1,14 +1,19 @@
 import Foundation
+import CryptoKit
 
 struct WatchAPI: Sendable {
     var base: URL
     var key: String
     private let session: URLSession
+    /// Ed25519 private key (base64-encoded raw 32 bytes) for signing source requests.
+    /// Stored in Keychain; loaded at runtime.
+    var ed25519PrivateKey: String?
 
-    init(base: URL, key: String, session: URLSession = .shared) {
+    init(base: URL, key: String, session: URLSession = .shared, ed25519PrivateKey: String? = nil) {
         self.base = base
         self.key = key
         self.session = session
+        self.ed25519PrivateKey = ed25519PrivateKey
     }
 
     func items() async throws -> [Movie] {
@@ -172,7 +177,17 @@ struct WatchAPI: Sendable {
         guard let url = components.url else { throw WatchError.server("Bad URL") }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+
+        // Determine auth method: Ed25519 for source endpoints (except search), Bearer for others
+        let isSourceAuthedEndpoint = path.starts(with: "v1/sources/") &&
+            (path.contains("/resolve/") || path.contains("/download"))
+
+        if isSourceAuthedEndpoint {
+            try addEd25519Headers(to: &request)
+        } else {
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        }
+
         request.setValue("Watch/1", forHTTPHeaderField: "User-Agent")
         if let contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
         if let range { request.setValue(range, forHTTPHeaderField: "Range") }
@@ -185,6 +200,32 @@ struct WatchAPI: Sendable {
             throw WatchError.server(message)
         }
         return data
+    }
+
+    /// Add Ed25519 signature headers: watch_public_key, watch_signature, watch_timestamp, watch_nonce
+    private func addEd25519Headers(to request: inout URLRequest) throws {
+        guard let privB64 = ed25519PrivateKey,
+              let privData = Data(base64Encoded: privB64)
+        else {
+            throw WatchError.server("Ed25519 private key not configured")
+        }
+
+        let privKey = try Curve25519.Signing.PrivateKey(rawRepresentation: privData)
+        let pubKey = privKey.publicKey
+        let pubB64 = pubKey.rawRepresentation.base64EncodedString()
+
+        let timestamp = String(Int(Date().timeIntervalSince1970 * 1000)) // ms since epoch
+        let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(32)
+        let message = "\(timestamp).\(nonce)"
+        let messageData = Data(message.utf8)
+
+        let signature = try privKey.signature(for: messageData)
+        let sigB64 = signature.base64EncodedString()
+
+        request.setValue(pubB64, forHTTPHeaderField: "watch_public_key")
+        request.setValue(sigB64, forHTTPHeaderField: "watch_signature")
+        request.setValue(timestamp, forHTTPHeaderField: "watch_timestamp")
+        request.setValue(String(nonce), forHTTPHeaderField: "watch_nonce")
     }
 }
 

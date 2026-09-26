@@ -30,6 +30,7 @@ final class LibraryModel {
     var downloading: [String: Double] = [:]
     var serverText: String
     var keyText: String
+    var ed25519PrivateKeyText: String = ""
 
     let media = MediaStore()
     private var downloads: [String: Task<Void, Never>] = [:]
@@ -38,6 +39,7 @@ final class LibraryModel {
     init() {
         serverText = defaults.string(forKey: "watch.server") ?? WatchBuiltIn.server
         keyText = defaults.string(forKey: "watch.key") ?? WatchBuiltIn.key
+        ed25519PrivateKeyText = defaults.string(forKey: "watch.ed25519PrivateKey") ?? ""
         if let data = try? Data(contentsOf: Self.cacheURL()),
            let list = try? JSONDecoder().decode([Movie].self, from: data) {
             movies = list
@@ -51,7 +53,12 @@ final class LibraryModel {
     var api: WatchAPI {
         let trimmed = serverText.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let url = URL(string: trimmed) ?? URL(string: WatchBuiltIn.server)!
-        return WatchAPI(base: url, key: keyText.trimmingCharacters(in: .whitespacesAndNewlines))
+        let edKey = ed25519PrivateKeyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return WatchAPI(
+            base: url,
+            key: keyText.trimmingCharacters(in: .whitespacesAndNewlines),
+            ed25519PrivateKey: edKey.isEmpty ? nil : edKey
+        )
     }
 
     func boot() async {
@@ -63,6 +70,7 @@ final class LibraryModel {
     func saveSettings() {
         defaults.set(serverText.trimmingCharacters(in: CharacterSet(charactersIn: "/")), forKey: "watch.server")
         defaults.set(keyText.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "watch.key")
+        defaults.set(ed25519PrivateKeyText.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "watch.ed25519PrivateKey")
     }
 
     func refresh() async {
@@ -160,6 +168,33 @@ final class LibraryModel {
         }
     }
 
+    // MARK: - Sources (generic)
+
+    /// List available sources.
+    func listSources() async throws -> [SourceInfo] {
+        try await api.listSources()
+    }
+
+    /// Search a source by query.
+    func sourceSearch(query: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+        try await api.sourceSearch(query: query, source: source)
+    }
+
+    /// Search a source by IMDb ID.
+    func sourceSearchByImdb(imdbId: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+        try await api.sourceSearchByImdb(imdbId: imdbId, source: source)
+    }
+
+    /// Resolve a source item to stream info.
+    func sourceResolve(source: String, id: String) async throws -> SourceStreamInfo {
+        try await api.sourceResolve(source: source, id: id)
+    }
+
+    /// Download the selected quality to the library.
+    func sourceDownload(source: String, stream: SourceStreamInfo, qualityHeight: Int, subtitleLang: String?) async throws -> Movie {
+        try await api.sourceDownload(source: source, stream: stream, qualityHeight: qualityHeight, subtitleLang: subtitleLang)
+    }
+
     func rematch(_ movie: Movie) async {
         do {
             let updated = try await api.rematch(id: movie.id)
@@ -244,33 +279,6 @@ final class LibraryModel {
 
     func subtitleText(_ movie: Movie, lang: String) async throws -> String {
         try await media.subtitleFile(api: api, id: movie.id, lang: lang)
-    }
-
-    // MARK: - Sources (generic)
-
-    /// List available sources.
-    func listSources() async throws -> [SourceInfo] {
-        try await api.listSources()
-    }
-
-    /// Search a source by query.
-    func sourceSearch(query: String, source: String = "67movies") async throws -> [SourceSearchResult] {
-        try await api.sourceSearch(query: query, source: source)
-    }
-
-    /// Search a source by IMDb ID.
-    func sourceSearchByImdb(imdbId: String, source: String = "67movies") async throws -> [SourceSearchResult] {
-        try await api.sourceSearchByImdb(imdbId: imdbId, source: source)
-    }
-
-    /// Resolve a source item to stream info.
-    func sourceResolve(source: String, id: String) async throws -> SourceStreamInfo {
-        try await api.sourceResolve(source: source, id: id)
-    }
-
-    /// Download the selected quality to the library.
-    func sourceDownload(source: String, stream: SourceStreamInfo, qualityHeight: Int, subtitleLang: String?) async throws -> Movie {
-        try await api.sourceDownload(source: source, stream: stream, qualityHeight: qualityHeight, subtitleLang: subtitleLang)
     }
 
     private func replace(_ movie: Movie) {

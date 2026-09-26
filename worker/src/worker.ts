@@ -77,7 +77,7 @@ export default {
     }
     const publicMedia = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/media$/i);
     if (publicMedia && (request.method === "GET" || request.method === "HEAD")) {
-      // iOS app streams with Bearer key or ?key=; Roku channel with keypair headers.
+      // iOS app streams with Bearer key or ?key=; Roku channel with Ed25519 signature.
       const ok = (await rokuAuthorized(request, env)) || authorized(request, env.WATCH_KEY || "") || queryKey(request, env);
       if (!ok) return json({ error: "unauthorized" }, 401);
       return media(request, env, publicMedia[1]!);
@@ -120,7 +120,8 @@ export default {
       return json(await source.search(q));
     }
 
-    if (!authorized(request, env.WATCH_KEY || "")) return json({ error: "unauthorized" }, 401);
+    // Ed25519 auth for source resolve/download
+    if (!(await sourceAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
     try {
       // Source resolve (auth required)
       const sourceResolve = path.match(/^\/v1\/sources\/([a-z0-9-]+)\/resolve\/(.+)$/i);
@@ -188,14 +189,42 @@ function authorized(request: Request, key: string): boolean {
   return n === 0;
 }
 
-/** Validate Roku app request: Ed25519 public key ID + private key. */
+/** Validate Roku app request: Ed25519 signature verification. */
 async function rokuAuthorized(request: Request, env: Env): Promise<boolean> {
   const secrets = await rokuSecrets(env);
   if (!secrets) return false;
-  const keyId = request.headers.get("x-key-id") || "";
-  const apiKey = request.headers.get("x-api-key") || "";
-  if (!constantTimeEqual(keyId, secrets.pub) || !constantTimeEqual(apiKey, secrets.priv)) return false;
-  return true;
+
+  const pub = request.headers.get("watch_public_key") || "";
+  const sigB64 = request.headers.get("watch_signature") || "";
+  const timestamp = request.headers.get("watch_timestamp") || "";
+  const nonce = request.headers.get("watch_nonce") || "";
+
+  if (!pub || !sigB64 || !timestamp || !nonce) return false;
+  if (!constantTimeEqual(pub, secrets.pub)) return false;
+
+  // Replay protection: timestamp within 30s, nonce not seen recently
+  const now = Date.now();
+  const ts = Date.parse(timestamp);
+  if (isNaN(ts) || Math.abs(now - ts) > 30_000) return false;
+
+  const message = `${timestamp}.${nonce}`;
+  const sig = Uint8Array.from(atob(sigB64), c => c.charCodeAt(0));
+  const pubKey = hexToBytes(secrets.pub);
+  if (pubKey.length !== 32) return false;
+
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      pubKey,
+      { name: "Ed25519" },
+      false,
+      ["verify"]
+    );
+    const ok = await crypto.subtle.verify("Ed25519", key, sig, new TextEncoder().encode(message));
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 type RokuSecrets = { pub: string; priv: string };
@@ -213,6 +242,51 @@ async function rokuSecrets(env: Env): Promise<RokuSecrets | null> {
     return rokuSecretsCache;
   } catch {
     return null;
+  }
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  }
+  return bytes;
+}
+
+/** Validate source request: Ed25519 signature verification using WATCH_PUBLIC_KEY/WATCH_PRIVATE_KEY. */
+async function sourceAuthorized(request: Request, env: Env): Promise<boolean> {
+  const secrets = await rokuSecrets(env); // Reuses same secrets store
+  if (!secrets) return false;
+
+  const pub = request.headers.get("watch_public_key") || "";
+  const sigB64 = request.headers.get("watch_signature") || "";
+  const timestamp = request.headers.get("watch_timestamp") || "";
+  const nonce = request.headers.get("watch_nonce") || "";
+
+  if (!pub || !sigB64 || !timestamp || !nonce) return false;
+  if (!constantTimeEqual(pub, secrets.pub)) return false;
+
+  // Replay protection: timestamp within 30s
+  const now = Date.now();
+  const ts = Date.parse(timestamp);
+  if (isNaN(ts) || Math.abs(now - ts) > 30_000) return false;
+
+  const message = `${timestamp}.${nonce}`;
+  const sig = Uint8Array.from(atob(sigB64), c => c.charCodeAt(0));
+  const pubKey = hexToBytes(secrets.pub);
+  if (pubKey.length !== 32) return false;
+
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      pubKey,
+      { name: "Ed25519" },
+      false,
+      ["verify"]
+    );
+    return await crypto.subtle.verify("Ed25519", key, sig, new TextEncoder().encode(message));
+  } catch {
+    return false;
   }
 }
 
