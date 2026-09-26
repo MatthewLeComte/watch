@@ -1,99 +1,80 @@
-/** Meta-source: Cinemeta search + working stream providers. */
+/** Meta-source: RiveStream only (TMDB ID → HLS via headless). */
 
 import type { Env } from "../env";
 import { parseReleaseName } from "../lib";
-import { cinemetaSearch, cinemetaMeta } from "../cinemeta";
 import { Source, type SearchResult, type StreamInfo, type Quality, type SubtitleTrack } from "./index";
 
+const TMDB_BASE = "https://api.themoviedb.org/3";
 const TMDB_IMAGE = "https://image.tmdb.org/t/p/w500";
-
-interface StreamProvider {
-  key: string;
-  name: string;
-  resolve(env: Env, imdbId: string, type: "movie" | "series"): Promise<string | null>;
-  extractHls(env: Env, embedHtml: string, embedUrl: string): Promise<string | null>;
-}
-
-const PROVIDERS: StreamProvider[] = [
-  {
-    key: "67movies",
-    name: "67movies",
-    async resolve(env: Env, imdbId: string, type: "movie" | "series") {
-      const { searchByImdb } = await import("./67movies");
-      const result = await searchByImdb(imdbId);
-      if (!result) return null;
-      return `${result.id}`; // Return 67movies internal ID
-    },
-    async extractHls(env: Env, embedHtml: string, embedUrl: string) {
-      // For 67movies, we don't use embedHtml - we use their ID to resolve via their API
-      return null;
-    },
-  },
-];
 
 export const sourceMeta: Source = {
   key: "meta",
-  name: "Meta (Cinemeta + Providers)",
+  name: "Meta (RiveStream)",
 
   async search(query: string, env: Env): Promise<SearchResult[]> {
-    const hits = await cinemetaSearch(query);
-    return hits.slice(0, 20).map(h => ({
-      id: `meta:${h.id}`,
-      title: h.name,
-      year: h.year ? Number(h.year) : null,
-      imdbId: h.id,
-      poster: h.poster,
+    const apiKey = env.WATCH_TMDB_API_KEY;
+    if (!apiKey) return [];
+    const url = `${TMDB_BASE}/search/movie?api_key=${apiKey}&query=${encodeURIComponent(query)}&language=en-US&include_adult=false`;
+    const res = await fetch(url, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return [];
+    const data = await res.json() as { results: any[] };
+    return data.results.slice(0, 20).map(r => ({
+      id: `meta:${r.id}`, // TMDB ID as universal key
+      title: r.title || "",
+      year: r.release_date ? Number(r.release_date.slice(0, 4)) : null,
+      imdbId: null,
+      poster: r.poster_path ? `${TMDB_IMAGE}${r.poster_path}` : null,
       type: "movie" as const,
     }));
   },
 
   async searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null> {
-    const hits = await cinemetaSearch(imdbId);
-    const hit = hits.find(h => h.id === imdbId) || hits[0];
-    if (!hit) return null;
+    const tmdbId = await getTmdbIdFromImdb(env, imdbId);
+    if (!tmdbId) return null;
+    const apiKey = env.WATCH_TMDB_API_KEY;
+    if (!apiKey) return null;
+    const detailUrl = `${TMDB_BASE}/movie/${tmdbId}?api_key=${apiKey}&language=en-US`;
+    const res = await fetch(detailUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const detail = await res.json() as any;
     return {
-      id: `meta:${hit.id}`,
-      title: hit.name,
-      year: hit.year ? Number(hit.year) : null,
-      imdbId: hit.id,
-      poster: hit.poster,
+      id: `meta:${tmdbId}`,
+      title: detail.title || "",
+      year: detail.release_date ? Number(detail.release_date.slice(0, 4)) : null,
+      imdbId,
+      poster: detail.poster_path ? `${TMDB_IMAGE}${detail.poster_path}` : null,
       type: "movie" as const,
-    };
+    });
   },
 
   async resolve(env: Env, id: string): Promise<StreamInfo | null> {
-    const imdbId = id.replace("meta:", "");
-    if (!/^tt\d{7,8}$/.test(imdbId)) return null;
+    const tmdbIdStr = id.replace("meta:", "");
+    const tmdbId = Number(tmdbIdStr);
+    if (!tmdbId) return null;
 
-    // Get full metadata from Cinemeta
-    const meta = await cinemetaMeta(imdbId);
-    if (!meta) return null;
+    const apiKey = env.WATCH_TMDB_API_KEY;
+    if (!apiKey) return null;
+    const detailUrl = `${TMDB_BASE}/movie/${tmdbId}?api_key=${apiKey}&language=en-US&append_to_response=external_ids`;
+    const res = await fetch(detailUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const detail = await res.json() as any;
 
-    // Try each provider
-    for (const provider of PROVIDERS) {
-      const providerId = await provider.resolve(env, imdbId, "movie");
-      if (providerId) {
-        // For 67movies, we need to resolve their ID to get the stream
-        if (provider.key === "67movies") {
-          const { resolveMovie } = await import("./67movies");
-          const stream = await resolveMovie(env, providerId);
-          if (stream) {
-            return {
-              id,
-              title: meta.name,
-              year: meta.year ? Number(meta.year) : null,
-              imdbId: meta.imdbId,
-              poster: meta.poster,
-              hlsUrl: stream.hlsUrl,
-              qualities: stream.qualities,
-              subtitles: stream.subtitles,
-            };
-          }
-        }
-      }
-    }
+    // Single provider: RiveStream (TMDB ID → headless → HLS)
+    const { extractHlsFromRiveStream } = await import("./rivestream");
+    const pageUrl = `https://www.rivestream.app/watch?type=movie&id=${tmdbId}`;
+    const browserResult = await extractHlsFromRiveStream(env, `https://www.rivestream.app/watch?type=movie&id=${tmdbId}`);
+    if (!browserResult) return null;
 
-    return null;
+    return {
+      id: `meta:${tmdbId}`,
+      title: detail.title,
+      year: detail.release_date ? Number(detail.release_date.slice(0, 4)) : null,
+      imdbId: detail.external_ids?.imdb_id,
+      poster: detail.poster_path ? `${TMDB_IMAGE}${detail.poster_path}` : null,
+      hlsUrl: browserResult.hlsUrl,
+      qualities: browserResult.qualities,
+      subtitles: browserResult.subtitles,
+    };
   },
 
   async downloadAndIngest(
@@ -102,10 +83,6 @@ export const sourceMeta: Source = {
     quality: Quality,
     subtitle?: SubtitleTrack,
   ): Promise<string> {
-    const imdbId = stream.imdbId;
-    if (!imdbId) throw new Error("no_imdb_id");
-
-    // Fetch the HLS stream directly from the resolved URL
     const hlsRes = await fetch(stream.hlsUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(30000) });
     if (!hlsRes.ok || !hlsRes.body) throw new Error("hls_fetch_failed");
 
@@ -122,7 +99,6 @@ export const sourceMeta: Source = {
     const segmentUrls = parseMediaPlaylist(variantText, variantUrl.substring(0, variantUrl.lastIndexOf("/") + 1));
     if (segmentUrls.length === 0) throw new Error("no_segments");
 
-    // Create movie row
     const parsed = parseReleaseName(`${stream.title} ${stream.year ?? ""}.mp4`);
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -132,7 +108,6 @@ export const sourceMeta: Source = {
        VALUES (?, ?, 0, ?, ?, ?, ?, ?, 'uploading', ?, ?)`
     ).bind(id, `${parsed.title}.mp4`, "video/mp4", "mp4", parsed.title, stream.title, stream.year, now, now).run();
 
-    // Download segments to R2 multipart
     const upload = await env.watch_bucket.createMultipartUpload(`video/${id}`, {
       httpMetadata: { contentType: "video/mp4" },
     });
@@ -250,3 +225,26 @@ function parseMediaPlaylist(text: string, baseUrl: string): string[] {
     .filter(l => l && !l.startsWith("#"))
     .map(l => l.startsWith("http") ? l : new URL(l, baseUrl).href);
 }
+
+async function getTmdbIdFromImdb(env: Env, imdbId: string): Promise<number | null> {
+  const apiKey = env.WATCH_TMDB_API_KEY;
+  if (!apiKey) return null;
+  const url = `${TMDB_BASE}/find/${imdbId}?api_key=${apiKey}&external_source=imdb_id`;
+  const res = await fetch(url, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(8000) });
+  if (!res.ok) return null;
+  const data = await res.json() as { movie_results?: any[] };
+  return data.movie_results?.[0]?.id || null;
+}
+
+async function completeHlsUpload(env: Env, id: string, size: number, segments: number): Promise<void> {
+  const row = await env.watch.prepare("SELECT upload_id, parts_json FROM upload WHERE movie_id = ?").bind(id).first<{ upload_id: string; parts_json: string }>();
+  if (!row) throw new Error("no_upload");
+  const parts = JSON.parse(row.parts_json) as { partNumber: number; etag: string }[];
+  await env.watch_bucket.resumeMultipartUpload(`video/${id}`, row.upload_id).complete(
+    parts.map(p => ({ partNumber: p.partNumber, etag: p.etag }))
+  );
+  await env.watch.prepare("DELETE FROM upload WHERE movie_id = ?").bind(id).run();
+}
+
+const TMDB_BASE = "https://api.themoviedb.org/3";
+const TMDB_IMAGE = "https://image.tmdb.org/t/p/w500";

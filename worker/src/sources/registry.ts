@@ -1,15 +1,9 @@
-/** Source registry - import all sources here to auto-register. */
+/** Source registry - only working sources. */
 
 import { registerSource } from "./index";
-import { source67movies } from "./67movies";
-import { sourceTmdbVixsrc } from "./tmdb_vixsrc";
-import { sourceMeta } from "./meta";
-import { sourceHeadless } from "./headless";
 import { sourceRiveStream } from "./rivestream";
+import { sourceMeta } from "./meta";
 
-registerSource(source67movies);
-registerSource(sourceTmdbVixsrc);
-registerSource(sourceMeta);
-registerSource(sourceHeadless);
 registerSource(sourceRiveStream);
-// Future sources: registerSource(sourceXYZ);
+registerSource(sourceMeta);
+// Only RiveStream + Meta (RiveStream) are working sources
