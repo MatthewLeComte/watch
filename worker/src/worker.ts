@@ -104,8 +104,8 @@ export default {
       return json(SOURCES.listSources().map(s => ({ key: s.key, name: s.name })));
     }
 
-    // GET /api/sources/search?q=toy+story&source=meta - public search
-    const searchMatch = path.match(/^\/api\/sources\/search$/i);
+    // GET /api/sources/search?q=toy+story&source=rivestream - public search
+    const searchMatch = path.match(/^\/api\/sources\/search\/?$/i);
     if (searchMatch && request.method === "GET") {
       const url = new URL(request.url);
       const q = url.searchParams.get("q") || "";
