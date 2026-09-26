@@ -15,7 +15,7 @@ export const sourceTmdbVixsrc: Source = {
   key: "tmdb_vixsrc",
   name: "TMDB + VixSrc",
 
-  async search(query: string): Promise<SearchResult[]> {
+  async search(query: string, env: Env): Promise<SearchResult[]> {
     const url = `${TMDB_BASE}/search/multi?api_key=${TMDB_KEY}&query=${encodeURIComponent(query)}&language=en-US&include_adult=false`;
     const res = await fetch(url, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return [];
@@ -28,13 +28,13 @@ export const sourceTmdbVixsrc: Source = {
         id: `${r.media_type}:${r.id}`,
         title: r.title || r.name || "",
         year: (r.release_date || r.first_air_date || "").slice(0, 4) ? Number((r.release_date || r.first_air_date || "").slice(0, 4)) : null,
-        imdbId: null, // would need extra call to get IMDB ID
+        imdbId: null,
         poster: r.poster_path ? `${TMDB_IMAGE}${r.poster_path}` : null,
         type: r.media_type === "movie" ? "movie" : "series",
       }));
   },
 
-  async searchByImdb(imdbId: string): Promise<SearchResult | null> {
+  async searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null> {
     const clean = imdbId.startsWith("tt") ? imdbId.slice(2) : imdbId;
     const url = `${TMDB_BASE}/find/${imdbId}?api_key=${TMDB_KEY}&external_source=imdb_id`;
     const res = await fetch(url, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });

@@ -10,7 +10,7 @@ export const source67movies: Source = {
   key: "67movies",
   name: "67movies",
 
-  async search(query: string): Promise<SearchResult[]> {
+  async search(query: string, env: Env): Promise<SearchResult[]> {
     const url = `${BASE}/search?keyword=${encodeURIComponent(query)}`;
     const res = await fetch(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return [];
@@ -18,7 +18,7 @@ export const source67movies: Source = {
     return parseSearchHtml(html);
   },
 
-  async searchByImdb(imdbId: string): Promise<SearchResult | null> {
+  async searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null> {
     const clean = imdbId.startsWith("tt") ? imdbId.slice(2) : imdbId;
     const url = `${BASE}/search?keyword=${clean}`;
     const res = await fetch(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(10000) });

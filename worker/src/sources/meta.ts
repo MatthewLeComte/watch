@@ -35,7 +35,7 @@ export const sourceMeta: Source = {
   key: "meta",
   name: "Meta (Cinemeta + Providers)",
 
-  async search(query: string): Promise<SearchResult[]> {
+  async search(query: string, env: Env): Promise<SearchResult[]> {
     const hits = await cinemetaSearch(query);
     return hits.slice(0, 20).map(h => ({
       id: `meta:${h.id}`,
@@ -47,7 +47,7 @@ export const sourceMeta: Source = {
     }));
   },
 
-  async searchByImdb(imdbId: string): Promise<SearchResult | null> {
+  async searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null> {
     const hits = await cinemetaSearch(imdbId);
     const hit = hits.find(h => h.id === imdbId) || hits[0];
     if (!hit) return null;

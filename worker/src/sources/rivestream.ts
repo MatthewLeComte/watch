@@ -6,17 +6,35 @@ import { parseReleaseName } from "../lib";
 
 const BASE = "https://www.rivestream.app";
 const TMDB_BASE = "https://api.themoviedb.org/3";
-// TMDB API key needed - use env or public
-const TMDB_KEY = "c6f3c8f1e4b0a7d5e8f9c0d1a2b3c4d5";
 const TMDB_IMAGE = "https://image.tmdb.org/t/p/w500";
+
+function getTmdbHeaders(env: Env): HeadersInit {
+  // Prefer Bearer token (v4 auth), fallback to API key (v3 auth)
+  const bearer = env.WATCH_TMDB_API_READ_ACCESS_TOKEN;
+  const apiKey = env.WATCH_TMDB_API_KEY;
+  if (bearer) {
+    return { Authorization: `Bearer ${bearer}`, Accept: "application/json" };
+  }
+  if (apiKey) {
+    return { Accept: "application/json" }; // API key passed as query param
+  }
+  return { Accept: "application/json" };
+}
+
+function getTmdbApiKeyParam(env: Env): string | null {
+  const apiKey = env.WATCH_TMDB_API_KEY;
+  return apiKey ? `api_key=${apiKey}` : null;
+}
 
 export const sourceRiveStream: Source = {
   key: "rivestream",
   name: "RiveStream (TMDB + Headless)",
 
-  async search(query: string): Promise<SearchResult[]> {
-    const url = `${TMDB_BASE}/search/movie?api_key=${TMDB_KEY}&query=${encodeURIComponent(query)}&language=en-US&include_adult=false`;
-    const res = await fetch(url, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+  async search(query: string, env: Env): Promise<SearchResult[]> {
+    const apiKeyParam = getTmdbApiKeyParam(env);
+    if (!apiKeyParam) return [];
+    const url = `${TMDB_BASE}/search/movie?${apiKeyParam}&query=${encodeURIComponent(query)}&language=en-US&include_adult=false`;
+    const res = await fetch(url, { headers: { ...getTmdbHeaders(env), "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return [];
     const data = await res.json() as { results: any[] };
     
@@ -24,16 +42,17 @@ export const sourceRiveStream: Source = {
       id: `rivestream:${r.id}`,
       title: r.title || "",
       year: r.release_date ? Number(r.release_date.slice(0, 4)) : null,
-      imdbId: null, // Would need extra call
+      imdbId: null,
       poster: r.poster_path ? `${TMDB_IMAGE}${r.poster_path}` : null,
       type: "movie" as const,
     }));
   },
 
-  async searchByImdb(imdbId: string): Promise<SearchResult | null> {
-    const clean = imdbId.startsWith("tt") ? imdbId.slice(2) : imdbId;
-    const url = `${TMDB_BASE}/find/${imdbId}?api_key=${TMDB_KEY}&external_source=imdb_id`;
-    const res = await fetch(url, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+  async searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null> {
+    const apiKeyParam = getTmdbApiKeyParam(env);
+    if (!apiKeyParam) return null;
+    const url = `${TMDB_BASE}/find/${imdbId}?${apiKeyParam}&external_source=imdb_id`;
+    const res = await fetch(url, { headers: { ...getTmdbHeaders(env), "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return null;
     const data = await res.json() as { movie_results?: any[] };
     const movie = data.movie_results?.[0];
@@ -55,8 +74,10 @@ export const sourceRiveStream: Source = {
     if (!tmdbId) return null;
 
     // Get full metadata from TMDB
-    const detailUrl = `${TMDB_BASE}/movie/${tmdbId}?api_key=${TMDB_KEY}&language=en-US&append_to_response=external_ids`;
-    const res = await fetch(detailUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+    const apiKeyParam = getTmdbApiKeyParam(env);
+    if (!apiKeyParam) return null;
+    const detailUrl = `${TMDB_BASE}/movie/${tmdbId}?${apiKeyParam}&language=en-US&append_to_response=external_ids`;
+    const res = await fetch(detailUrl, { headers: { ...getTmdbHeaders(env), "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return null;
     const detail = await res.json() as any;
 

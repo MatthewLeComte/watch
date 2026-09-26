@@ -40,8 +40,8 @@ export type SubtitleTrack = {
 export interface Source {
   readonly key: string;           // e.g., "67movies"
   readonly name: string;          // Display name
-  search(query: string): Promise<SearchResult[]>;
-  searchByImdb(imdbId: string): Promise<SearchResult | null>;
+  search(query: string, env: Env): Promise<SearchResult[]>;
+  searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null>;
   resolve(env: Env, id: string): Promise<StreamInfo | null>;
   downloadAndIngest(env: Env, stream: StreamInfo, quality: Quality, subtitle?: SubtitleTrack): Promise<string>;
 }
