@@ -98,14 +98,15 @@ export default {
       return handleWatchMcp(request, env);
     }
 
-    // Generic source endpoints (allow optional trailing slash)
-    const sourcesList = path.match(/^\/v1\/sources\/?$/i);
-    if (sourcesList && request.method === "GET") {
+    // ===== FLAT SOURCE ENDPOINTS (no auth for search, simple paths) =====
+    // GET /api/sources - list sources
+    if (path === "/api/sources" && request.method === "GET") {
       return json(SOURCES.listSources().map(s => ({ key: s.key, name: s.name })));
     }
 
-    const sourceSearch = path.match(/^\/v1\/sources\/search\/?$/i);
-    if (sourceSearch && request.method === "GET") {
+    // GET /api/sources/search?q=toy+story&source=meta - public search
+    const searchMatch = path.match(/^\/api\/sources\/search$/i);
+    if (searchMatch && request.method === "GET") {
       const url = new URL(request.url);
       const q = url.searchParams.get("q") || "";
       const imdb = url.searchParams.get("imdb") || "";
@@ -120,24 +121,23 @@ export default {
       return json(await source.search(q));
     }
 
-    // Ed25519 auth for source resolve/download
+    // All below require Ed25519 auth
     if (!(await sourceAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
+
     try {
-      // Source resolve (auth required)
-      const sourceResolve = path.match(/^\/v1\/sources\/([a-z0-9-]+)\/resolve\/(.+)\/?$/i);
-      if (sourceResolve && request.method === "GET") {
-        const sourceKey = sourceResolve[1]!;
-        const sourceId = sourceResolve[2]!;
-        const source = SOURCES.get(sourceKey);
+      // GET /api/sources/meta/resolve/:tmdbId - resolve to stream info
+      const resolveMatch = path.match(/^\/api\/sources\/meta\/resolve\/(\d+)$/i);
+      if (resolveMatch && request.method === "GET") {
+        const tmdbId = Number(resolveMatch[1]!);
+        const source = SOURCES.get("meta");
         if (!source) return json({ error: "source_not_found" }, 404);
-        return json(await source.resolve(env, sourceId) ?? { error: "not_found" }, 404);
+        return json(await source.resolve(env, `meta:${tmdbId}`) ?? { error: "not_found" }, 404);
       }
 
-      // Source download (auth required)
-      const sourceDownload = path.match(/^\/v1\/sources\/([a-z0-9-]+)\/download\/?$/i);
-      if (sourceDownload && request.method === "POST") {
-        const sourceKey = sourceDownload[1]!;
-        const source = SOURCES.get(sourceKey);
+      // POST /api/sources/meta/download - download + ingest
+      const downloadMatch = path.match(/^\/api\/sources\/meta\/download$/i);
+      if (downloadMatch && request.method === "POST") {
+        const source = SOURCES.get("meta");
         if (!source) return json({ error: "source_not_found" }, 404);
         const body = (await request.json()) as { stream: StreamInfo; quality?: { height: number }; subtitleLang?: string };
         const stream = body.stream;
@@ -148,6 +148,7 @@ export default {
         return json({ id }, 201);
       }
 
+      // ===== EXISTING ITEM ENDPOINTS =====
       if (request.method === "GET" && path === "/v1/items") return listItems(env);
       if (request.method === "POST" && path === "/v1/items") return createItem(request, env);
       if (path === "/v1/items/all/rematch" && request.method === "POST") return rematchAll(env);
