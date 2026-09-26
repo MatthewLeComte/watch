@@ -4,7 +4,8 @@ import { ingest, saveCache } from "./ingest";
 import { contentTypeFor, extOf, parseByteRange, parseReleaseName, pickTrailerId, srtToVtt } from "./lib";
 import type { TrailerVideo } from "./lib";
 import { handleWatchMcp } from "./mcp";
-import { search67movies, searchByImdb, resolveMovie, downloadAndIngest, type SearchResult, type StreamInfo } from "./sources/67movies";
+import { SOURCES, type SearchResult, type StreamInfo, type Quality, type SubtitleTrack } from "./sources";
+import "./sources/registry";
 
 /** R2 requires every part except the last to be at least 5 MiB. 8 MiB matches that rule. */
 const PART = 8 * 1024 * 1024;
@@ -97,34 +98,52 @@ export default {
       return handleWatchMcp(request, env);
     }
 
-    // 67movies source endpoints (public search, auth for download)
-    const sourceSearch = path.match(/^\/v1\/sources\/67movies\/search$/i);
+    // Generic source endpoints
+    const sourcesList = path.match(/^\/v1\/sources$/i);
+    if (sourcesList && request.method === "GET") {
+      return json(SOURCES.listSources().map(s => ({ key: s.key, name: s.name })));
+    }
+
+    const sourceSearch = path.match(/^\/v1\/sources\/search$/i);
     if (sourceSearch && request.method === "GET") {
-      const q = new URL(request.url).searchParams.get("q") || "";
-      const imdb = new URL(request.url).searchParams.get("imdb") || "";
+      const url = new URL(request.url);
+      const q = url.searchParams.get("q") || "";
+      const imdb = url.searchParams.get("imdb") || "";
+      const sourceKey = url.searchParams.get("source") || "67movies";
+      const source = SOURCES.get(sourceKey);
+      if (!source) return json({ error: "source_not_found" }, 404);
       if (imdb) {
-        const result = await searchByImdb(imdb);
+        const result = await source.searchByImdb(imdb);
         return json(result ? [result] : []);
       }
       if (!q) return json({ error: "query_required" }, 400);
-      return json(await search67movies(q));
+      return json(await source.search(q));
     }
 
     if (!authorized(request, env.WATCH_KEY || "")) return json({ error: "unauthorized" }, 401);
     try {
-      // 67movies source endpoints (auth required)
-      const sourceResolve = path.match(/^\/v1\/sources\/67movies\/resolve\/(\d+)$/i);
+      // Source resolve (auth required)
+      const sourceResolve = path.match(/^\/v1\/sources\/([a-z0-9-]+)\/resolve\/(.+)$/i);
       if (sourceResolve && request.method === "GET") {
-        return json(await resolveMovie(env, sourceResolve[1]!) ?? { error: "not_found" }, 404);
+        const sourceKey = sourceResolve[1]!;
+        const sourceId = sourceResolve[2]!;
+        const source = SOURCES.get(sourceKey);
+        if (!source) return json({ error: "source_not_found" }, 404);
+        return json(await source.resolve(env, sourceId) ?? { error: "not_found" }, 404);
       }
-      const sourceDownload = path.match(/^\/v1\/sources\/67movies\/download$/i);
+
+      // Source download (auth required)
+      const sourceDownload = path.match(/^\/v1\/sources\/([a-z0-9-]+)\/download$/i);
       if (sourceDownload && request.method === "POST") {
+        const sourceKey = sourceDownload[1]!;
+        const source = SOURCES.get(sourceKey);
+        if (!source) return json({ error: "source_not_found" }, 404);
         const body = (await request.json()) as { stream: StreamInfo; quality?: { height: number }; subtitleLang?: string };
         const stream = body.stream;
         if (!stream?.hlsUrl) return json({ error: "stream_required" }, 400);
         const quality = stream.qualities.find(q => q.height === (body.quality?.height ?? stream.qualities[0]?.height)) ?? stream.qualities[0];
         const subtitle = body.subtitleLang ? stream.subtitles.find(s => s.lang === body.subtitleLang) : undefined;
-        const id = await downloadAndIngest(env, stream, quality, subtitle);
+        const id = await source.downloadAndIngest(env, stream, quality, subtitle);
         return json({ id }, 201);
       }
 

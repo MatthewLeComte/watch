@@ -4,13 +4,14 @@ Checkout: `/Users/matthew/Developer/GitHub/watch/roku`
 GitHub: `MatthewLeComte/watch`  
 Channel: `Watch` (private, sideloaded)
 
-Target: Roku TV, SceneGraph, FHD (`ui_resolutions=fhd`). No HLS, no subtitles — direct MP4 from the `watch` worker. Single shared secret baked into app.zip at build time.
+Target: Roku TV, SceneGraph, FHD (`ui_resolutions=fhd`). No HLS, no subtitles — direct MP4 from the `watch` worker. Keypair baked into app.zip at build time.
 
 ## Build
 
 ```
 cd /Users/matthew/Developer/GitHub/watch/roku
-export ROKU_SHARED_SECRET="<generate once, keep in password manager>"
+export WATCH_PUBLIC_KEY="<from Cloudflare Secrets Store>"
+export WATCH_PRIVATE_KEY="<from Cloudflare Secrets Store>"
 ./build.sh
 ```
 
@@ -22,7 +23,7 @@ curl -F "archive=@app.zip" http://<roku-ip>/plugin_install
 
 ## Data sources
 
-Roku endpoints require the shared secret header (injected by app):
+Roku endpoints require keypair headers (injected by app):
 
 | Endpoint | Use |
 |----------|-----|
