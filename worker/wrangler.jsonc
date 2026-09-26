@@ -44,6 +44,5 @@
       "bucket_name": "watch"
     }
   ],
-  "browser": { "binding": "BROWSER" },
-  "assets": { "not_found_handling": "none" }
+  "browser": { "binding": "BROWSER" }
 }
