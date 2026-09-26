@@ -79,123 +79,103 @@ struct LibraryView: View {
     private var home: some View {
         GeometryReader { geo in
             let w = geo.size.width, h = geo.size.height
-            let maxVideoH = isCompact ? h * 0.4 : min(w * 9 / 16, 450)
-            let videoH = isCompact ? h * 0.4 : min(w * 9 / 16, 450)
+            // Apple TV app spec: single hero carousel with trailer, 320pt poster
+            let posterH: CGFloat = isCompact ? min(h * 0.35, 320) : 320
+            let posterW = posterH * 2 / 3
             let infoH: CGFloat = isCompact ? 160 : 140
-            let heroH = videoH + infoH
+            let heroH = posterH + infoH
             let pageH = max(200, h - heroH)
 
-            if isRegular && !isCompact {
-                NavigationSplitView {
-                    sidebar(shelves: shelves, pageH: pageH)
-                        .navigationTitle("Library")
-                } detail: {
-                    detailContent(w: w, h: h, videoH: videoH, infoH: infoH, heroH: heroH, pageH: pageH)
-                }
-            } else {
-                detailContent(w: w, h: h, videoH: videoH, infoH: infoH, heroH: heroH, pageH: pageH)
-            }
-        }
-    }
-
-    private func sidebar(shelves: [Shelf], pageH: CGFloat) -> some View {
-        List(shelves, selection: $shelfID) { shelf in
-            NavigationLink(value: shelf.id) {
-                Text(shelf.title)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.white)
-            }
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-        }
-        .listStyle(.sidebar)
-        .scrollContentBackground(.hidden)
-        .background(Color.black)
-        .frame(minWidth: 260, idealWidth: 300, maxWidth: 350)
-    }
-
-    private func detailContent(w: CGFloat, h: CGFloat, videoH: CGFloat, infoH: CGFloat, heroH: CGFloat, pageH: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            billboard(width: w, videoH: videoH, infoH: infoH)
-                .frame(width: w, height: heroH)
-            ScrollView(.vertical) {
-                LazyVStack(spacing: 0) {
-                    ForEach(shelves) { shelf in
-                        shelfRow(shelf, pageH: pageH)
-                            .containerRelativeFrame(.vertical)
-                            .id(shelf.id)
-                    }
-                }
-                .scrollTargetLayout()
-            }
-            .scrollTargetBehavior(.paging)
-            .scrollPosition(id: $shelfID)
-            .scrollIndicators(.hidden)
-            .frame(height: pageH)
-        }
-    }
-
-    private func billboard(width: CGFloat, videoH: CGFloat, infoH: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            ZStack {
-                Color.black
-                if playing == nil,
-                   let movie = heroMovie,
-                   let url = heroStreamURL {
-                    HeroTrailer(url: url, apiKey: url.host?.contains("cornerstonecoatings.com") == true ? library.api.key : nil)
-                        .id(url.absoluteString)
-                        .allowsHitTesting(false)
-                } else if let movie = heroMovie {
-                    billboardArt(movie)
-                }
-            }
-            .frame(width: width, height: videoH)
-            .clipped()
-            if let movie = heroMovie {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(movie.displayTitle)
-                        .font(.system(size: isCompact ? 28 : 36, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-                    HStack(spacing: 10) {
-                        if let p = movie.matchP, p > 0 {
-                            Text("\(Int((p * 100).rounded()))% Match")
-                                .foregroundStyle(.green)
-                                .font(.subheadline.weight(.bold))
+            VStack(spacing: 0) {
+                // SINGLE HERO CAROUSEL WITH TRAILER
+                heroCarousel(width: w, posterW: posterW, posterH: posterH, infoH: infoH)
+                    .frame(width: w, height: heroH)
+                // SECTIONS BELOW
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: 0) {
+                        ForEach(shelves) { shelf in
+                            shelfRow(shelf, pageH: pageH)
+                                .containerRelativeFrame(.vertical)
+                                .id(shelf.id)
                         }
-                        if !movie.yearText.isEmpty { Text(movie.yearText) }
-                        if let rt = movie.runtimeText { Text(rt) }
-                        Text("HD")
-                            .font(.caption2.weight(.bold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.7), lineWidth: 1))
                     }
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.9))
-                    Button { play(movie) } label: {
-                        Label("Play", systemImage: "play.fill")
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(.black)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, isCompact ? 12 : 16)
-                            .background(.white, in: RoundedRectangle(cornerRadius: 6))
-                    }
-                    .buttonStyle(.plain)
+                    .scrollTargetLayout()
                 }
-                .padding(.horizontal, isCompact ? 20 : 32)
-                .padding(.vertical, 14)
-                .frame(width: width, height: infoH, alignment: .leading)
-                .background(Color.black)
+                .scrollTargetBehavior(.paging)
+                .scrollPosition(id: $shelfID)
+                .scrollIndicators(.hidden)
+                .frame(height: pageH)
             }
         }
     }
 
-    private func billboardArt(_ movie: Movie) -> some View {
-        PosterImage(url: billboardURL(movie), title: movie.displayTitle)
-            .scaledToFill()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
+    private func heroCarousel(width: CGFloat, posterW: CGFloat, posterH: CGFloat, infoH: CGFloat) -> some View {
+        let movie = heroMovie
+        return ZStack(alignment: .top) {
+            // POSTER
+            if let movie {
+                PosterImage(url: billboardURL(movie), title: movie.displayTitle)
+                    .scaledToFill()
+                    .frame(width: posterW, height: posterH)
+                    .clipped()
+                    .frame(maxWidth: .infinity)
+            } else {
+                Color.black.frame(width: posterW, height: posterH).frame(maxWidth: .infinity)
+            }
+            // TRAILER OVERLAY (full poster area)
+            if let movie, playing == nil, let url = heroStreamURL {
+                HeroTrailer(url: url, apiKey: url.host?.contains("cornerstonecoatings.com") == true ? library.api.key : nil)
+                    .id(url.absoluteString)
+                    .allowsHitTesting(false)
+                    .frame(width: posterW, height: posterH)
+                    .clipped()
+                    .frame(maxWidth: .infinity)
+            }
+            // INFO OVERLAY (bottom of poster)
+            if let movie {
+                VStack {
+                    Spacer()
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(movie.displayTitle)
+                            .font(.system(size: isCompact ? 28 : 36, weight: .heavy))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+                        HStack(spacing: 10) {
+                            if let p = movie.matchP, p > 0 {
+                                Text("\(Int((p * 100).rounded()))% Match")
+                                    .foregroundStyle(.green)
+                                    .font(.subheadline.weight(.bold))
+                            }
+                            if !movie.yearText.isEmpty { Text(movie.yearText) }
+                            if let rt = movie.runtimeText { Text(rt) }
+                            Text("HD")
+                                .font(.caption2.weight(.bold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.7), lineWidth: 1))
+                        }
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.9))
+                        Button { play(movie) } label: {
+                            Label("Play", systemImage: "play.fill")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(.black)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, isCompact ? 12 : 16)
+                                .background(.white, in: RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, isCompact ? 20 : 32)
+                    .padding(.vertical, 14)
+                    .frame(width: width, height: infoH, alignment: .leading)
+                    .background(
+                        LinearGradient(colors: [.clear, .black.opacity(0.8), .black], startPoint: .top, endPoint: .bottom)
+                    )
+                }
+                .frame(height: posterH + infoH)
+            }
+        }
     }
 
     private func billboardURL(_ movie: Movie) -> URL? {
@@ -256,16 +236,8 @@ struct LibraryView: View {
     private var controls: some View {
         HStack { Spacer()
             Menu {
-                Button {
-                    importing = true
-                } label: {
-                    Label("Import File", systemImage: "square.and.arrow.down")
-                }
-                Button {
-                    showSourceSearch = true
-                } label: {
-                    Label("Search 67movies", systemImage: "magnifyingglass")
-                }
+                Button { importing = true } label: { Label("Import File", systemImage: "square.and.arrow.down") }
+                Button { showSourceSearch = true } label: { Label("Search Source", systemImage: "magnifyingglass") }
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 20, weight: .bold))
@@ -275,9 +247,7 @@ struct LibraryView: View {
             .buttonBorderShape(.circle)
             .accessibilityLabel("Add a movie")
         }.padding(.horizontal, isCompact ? 14 : 24).padding(.top, 6)
-        .sheet(isPresented: $showSourceSearch) {
-            SourceSearchView()
-        }
+        .sheet(isPresented: $showSourceSearch) { SourceSearchView() }
     }
 
     private var empty: some View {
@@ -294,7 +264,7 @@ struct LibraryView: View {
                         .foregroundStyle(.black)
                 }
                 Button { showSourceSearch = true } label: {
-                    Label("Search 67movies", systemImage: "magnifyingglass")
+                    Label("Search Source", systemImage: "magnifyingglass")
                         .font(.headline.weight(.bold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
@@ -309,7 +279,7 @@ struct LibraryView: View {
     private func handleImport(_ r: Result<[URL], Error>) {
         guard case .success(let urls) = r else { return }
         var items: [(URL, Bool)] = []
-        for u in urls { let ext = u.pathExtension.lowercased(); guard ["mp4","m4v","mov"].contains(ext) else { continue }; items.append((u, u.startAccessingSecurityScopedResource())) }
+        for u in urls { let ext = u.pathExtension.lowercased(); guard ["mp4","m4v","mov","mkv","webm","avi","flv","wmv","mpg","mpeg","m2v","m4s","ts","m2ts","vob","ogv","3gp","3g2"].contains(ext) else { continue }; items.append((u, u.startAccessingSecurityScopedResource())) }
         guard !items.isEmpty else { return }
         if items.count == 1, let only = items.first { pendingImport = only.0; pendingScoped = only.1 }
         else { library.importBulk(items) }
@@ -345,6 +315,8 @@ struct LibraryView: View {
 
     private func play(_ m: Movie) { playing = m }
 }
+
+private struct Shelf: Identifiable { let id: String; let title: String; let movies: [Movie] }
 
 /// Native muted looping trailer. Poster stays underneath until first frame.
 private struct HeroTrailer: View {
@@ -407,7 +379,6 @@ private struct HeroTrailer: View {
 
 private struct HeroPlayerLayer: UIViewRepresentable {
     let player: AVPlayer
-
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .black
@@ -417,7 +388,6 @@ private struct HeroPlayerLayer: UIViewRepresentable {
         view.layer.addSublayer(layer)
         return view
     }
-
     func updateUIView(_ view: UIView, context: Context) {
         (view.layer.sublayers?.first as? AVPlayerLayer)?.frame = view.bounds
     }
