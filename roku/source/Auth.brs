@@ -1,5 +1,5 @@
 ' Shared auth helpers. Imported via <script> where needed.
-' Keypair placeholders are replaced at build time by build.sh.
+' Ed25519 public/private key placeholders replaced at build time by build.sh.
 ' No sub Init() here (see Config.brs).
 
 function AuthHeaders() as Object

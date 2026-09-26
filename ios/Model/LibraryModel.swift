@@ -246,26 +246,31 @@ final class LibraryModel {
         try await media.subtitleFile(api: api, id: movie.id, lang: lang)
     }
 
-    // MARK: - 67movies Source
+    // MARK: - Sources (generic)
 
-    /// Search 67movies by query.
-    func sourceSearch(query: String) async throws -> [SourceSearchResult] {
-        try await api.sourceSearch(query: query)
+    /// List available sources.
+    func listSources() async throws -> [SourceInfo] {
+        try await api.listSources()
     }
 
-    /// Search 67movies by IMDb ID.
-    func sourceSearchByImdb(imdbId: String) async throws -> [SourceSearchResult] {
-        try await api.sourceSearchByImdb(imdbId: imdbId)
+    /// Search a source by query.
+    func sourceSearch(query: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+        try await api.sourceSearch(query: query, source: source)
     }
 
-    /// Resolve a movie page to stream info.
-    func sourceResolve(id: String) async throws -> SourceStreamInfo {
-        try await api.sourceResolve(id: id)
+    /// Search a source by IMDb ID.
+    func sourceSearchByImdb(imdbId: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+        try await api.sourceSearchByImdb(imdbId: imdbId, source: source)
+    }
+
+    /// Resolve a source item to stream info.
+    func sourceResolve(source: String, id: String) async throws -> SourceStreamInfo {
+        try await api.sourceResolve(source: source, id: id)
     }
 
     /// Download the selected quality to the library.
-    func sourceDownload(stream: SourceStreamInfo, qualityHeight: Int, subtitleLang: String?) async throws -> Movie {
-        try await api.sourceDownload(stream: stream, qualityHeight: qualityHeight, subtitleLang: subtitleLang)
+    func sourceDownload(source: String, stream: SourceStreamInfo, qualityHeight: Int, subtitleLang: String?) async throws -> Movie {
+        try await api.sourceDownload(source: source, stream: stream, qualityHeight: qualityHeight, subtitleLang: subtitleLang)
     }
 
     private func replace(_ movie: Movie) {

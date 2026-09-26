@@ -16,35 +16,47 @@ struct WatchAPI: Sendable {
         return try JSONDecoder().decode(ItemList.self, from: data).items
     }
 
-    // MARK: - 67movies Source
+    // MARK: - Sources (generic)
 
-    /// Search 67movies by query string.
-    func sourceSearch(query: String) async throws -> [SourceSearchResult] {
-        let data = try await send(path: "v1/sources/67movies/search", method: "GET", query: [URLQueryItem(name: "q", value: query)])
+    /// List available sources.
+    func listSources() async throws -> [SourceInfo] {
+        let data = try await send(path: "v1/sources", method: "GET")
+        return try JSONDecoder().decode([SourceInfo].self, from: data)
+    }
+
+    /// Search a source by query string.
+    func sourceSearch(query: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+        let data = try await send(path: "v1/sources/search", method: "GET", query: [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "source", value: source)
+        ])
         return try JSONDecoder().decode([SourceSearchResult].self, from: data)
     }
 
-    /// Search 67movies by IMDb ID.
-    func sourceSearchByImdb(imdbId: String) async throws -> [SourceSearchResult] {
-        let data = try await send(path: "v1/sources/67movies/search", method: "GET", query: [URLQueryItem(name: "imdb", value: imdbId)])
+    /// Search a source by IMDb ID.
+    func sourceSearchByImdb(imdbId: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+        let data = try await send(path: "v1/sources/search", method: "GET", query: [
+            URLQueryItem(name: "imdb", value: imdbId),
+            URLQueryItem(name: "source", value: source)
+        ])
         return try JSONDecoder().decode([SourceSearchResult].self, from: data)
     }
 
-    /// Resolve a movie page to stream info (master playlist, qualities, subtitles).
-    func sourceResolve(id: String) async throws -> SourceStreamInfo {
-        let data = try await send(path: "v1/sources/67movies/resolve/\(id)", method: "GET")
+    /// Resolve a source item to stream info (master playlist, qualities, subtitles).
+    func sourceResolve(source: String, id: String) async throws -> SourceStreamInfo {
+        let data = try await send(path: "v1/sources/\(source)/resolve/\(id)", method: "GET")
         return try JSONDecoder().decode(SourceStreamInfo.self, from: data)
     }
 
     /// Download the selected quality to the library.
-    func sourceDownload(stream: SourceStreamInfo, qualityHeight: Int, subtitleLang: String?) async throws -> Movie {
+    func sourceDownload(source: String, stream: SourceStreamInfo, qualityHeight: Int, subtitleLang: String?) async throws -> Movie {
         var obj: [String: Any] = [
             "stream": stream.toDictionary(),
             "quality": ["height": qualityHeight]
         ]
         if let subtitleLang { obj["subtitleLang"] = subtitleLang }
         let body = try JSONSerialization.data(withJSONObject: obj)
-        let data = try await send(path: "v1/sources/67movies/download", method: "POST", body: body, contentType: "application/json")
+        let data = try await send(path: "v1/sources/\(source)/download", method: "POST", body: body, contentType: "application/json")
         return try JSONDecoder().decode(Movie.self, from: data)
     }
 
@@ -174,6 +186,14 @@ struct WatchAPI: Sendable {
         }
         return data
     }
+}
+
+// MARK: - Source Types
+
+struct SourceInfo: Codable, Hashable, Sendable, Identifiable {
+    var id: String { key }
+    var key: String
+    var name: String
 }
 
 // MARK: - 67movies Types

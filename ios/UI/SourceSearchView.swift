@@ -16,6 +16,7 @@ struct SourceSearchView: View {
     @State private var pendingSubtitle: SourceSubtitle?
     @State private var downloading = false
     @State private var downloadStage = ""
+    @State private var selectedSource = "67movies"
 
     var body: some View {
         NavigationStack {
@@ -23,6 +24,36 @@ struct SourceSearchView: View {
                 Color.black.ignoresSafeArea()
 
                 VStack(spacing: 0) {
+                    // Source picker
+                    Menu {
+                        ForEach(["67movies"], id: \.self) { src in
+                            Button {
+                                selectedSource = src
+                            } label: {
+                                HStack {
+                                    Text(src)
+                                    if selectedSource == src {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "server.rack")
+                            Text(selectedSource)
+                            Image(systemName: "chevron.up.chevron.down")
+                        }
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.white.opacity(0.1), in: Capsule())
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.black)
+
                     // Search bar
                     searchBar
                         .padding(.horizontal, 16)
@@ -66,7 +97,7 @@ struct SourceSearchView: View {
                             Image(systemName: "magnifyingglass.circle")
                                 .font(.system(size: 60))
                                 .foregroundStyle(Cinema.red)
-                            Text("Search 67movies")
+                            Text("Search \(selectedSource)")
                                 .font(.title.weight(.bold))
                                 .foregroundStyle(.white)
                             Text("Type a movie title or IMDb ID (ttXXXXXXX)")
@@ -89,7 +120,7 @@ struct SourceSearchView: View {
                     }
                 }
             }
-            .navigationTitle("Add from 67movies")
+            .navigationTitle("Add from Source")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -100,6 +131,7 @@ struct SourceSearchView: View {
                 SourceResolveView(
                     library: library,
                     result: result,
+                    source: selectedSource,
                     onDownload: { stream, quality, subtitle in
                         selected = nil
                         pendingStream = stream
@@ -211,9 +243,9 @@ struct SourceSearchView: View {
         error = nil
         do {
             if let imdb {
-                results = try await library.sourceSearchByImdb(imdbId: imdb)
+                results = try await library.sourceSearchByImdb(imdbId: imdb, source: selectedSource)
             } else {
-                results = try await library.sourceSearch(query: query)
+                results = try await library.sourceSearch(query: query, source: selectedSource)
             }
         } catch {
             self.error = error.localizedDescription
@@ -228,6 +260,7 @@ struct SourceSearchView: View {
 
         do {
             let movie = try await library.sourceDownload(
+                source: selectedSource,
                 stream: stream,
                 qualityHeight: quality.height,
                 subtitleLang: subtitle?.lang
@@ -236,7 +269,6 @@ struct SourceSearchView: View {
             dismiss()
         } catch {
             self.error = error.localizedDescription
-            // Show error briefly then dismiss overlay
             try? await Task.sleep(for: .seconds(3))
         }
         downloading = false
@@ -266,6 +298,7 @@ struct SourceSearchView: View {
 struct SourceResolveView: View {
     let library: LibraryModel
     let result: SourceSearchResult
+    let source: String
     let onDownload: (SourceStreamInfo, SourceQuality, SourceSubtitle?) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -435,7 +468,7 @@ struct SourceResolveView: View {
         resolving = true
         error = nil
         do {
-            streamInfo = try await library.sourceResolve(id: result.id)
+            streamInfo = try await library.sourceResolve(source: source, id: result.id)
         } catch {
             self.error = error.localizedDescription
         }

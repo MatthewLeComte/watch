@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build script for the Roku app.
 # Injects WATCH_PUBLIC_KEY / WATCH_PRIVATE_KEY into a staging copy of Auth.brs, then zips.
-# Source tree is never mutated, so the key can't leak into git.
+# Source tree is never mutated, so the keys can't leak into git.
 set -euo pipefail
 
 ROKU_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -19,7 +19,7 @@ if [ -z "${WATCH_PUBLIC_KEY:-}" ] || [ -z "${WATCH_PRIVATE_KEY:-}" ]; then
   exit 1
 fi
 
-echo "Building with key ID: ${WATCH_PUBLIC_KEY:0:8}..."
+echo "Building with public key: ${WATCH_PUBLIC_KEY:0:8}..."
 
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT

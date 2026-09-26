@@ -188,7 +188,7 @@ function authorized(request: Request, key: string): boolean {
   return n === 0;
 }
 
-/** Validate Roku app request: public key ID + private secret. */
+/** Validate Roku app request: Ed25519 public key ID + private key. */
 async function rokuAuthorized(request: Request, env: Env): Promise<boolean> {
   const secrets = await rokuSecrets(env);
   if (!secrets) return false;

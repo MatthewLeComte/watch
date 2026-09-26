@@ -4,7 +4,7 @@ Checkout: `/Users/matthew/Developer/GitHub/watch/roku`
 GitHub: `MatthewLeComte/watch`  
 Channel: `Watch` (private, sideloaded)
 
-Target: Roku TV, SceneGraph, FHD (`ui_resolutions=fhd`). No HLS, no subtitles — direct MP4 from the `watch` worker. Keypair baked into app.zip at build time.
+Target: Roku TV, SceneGraph, FHD (`ui_resolutions=fhd`). No HLS, no subtitles — direct MP4 from the `watch` worker. Ed25519 keypair baked into app.zip at build time.
 
 ## Build
 
@@ -23,7 +23,7 @@ curl -F "archive=@app.zip" http://<roku-ip>/plugin_install
 
 ## Data sources
 
-Roku endpoints require keypair headers (injected by app):
+Roku endpoints require Ed25519 keypair headers (injected by app):
 
 | Endpoint | Use |
 |----------|-----|
