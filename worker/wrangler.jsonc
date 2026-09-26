@@ -7,7 +7,7 @@
   "workers_dev": false,
   "preview_urls": false,
   "build": {
-    "command": "npx wrangler deploy --dry-run --outdir=dist",
+    "command": "npm run typecheck",
     "watch_dir": "src"
   },
   "observability": { "enabled": true },
