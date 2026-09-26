@@ -1,58 +1,68 @@
-/** RiveStream source: TMDB ID → headless browser → HLS extraction. */
+/** RiveStream source: TMDB search → TMDB ID → RiveStream URL → Headless browser → HLS. */
 
 import type { Env } from "../env";
 import { Source, type SearchResult, type StreamInfo, type Quality, type SubtitleTrack } from "./index";
 import { parseReleaseName } from "../lib";
 
 const BASE = "https://www.rivestream.app";
+const TMDB_BASE = "https://api.themoviedb.org/3";
+// TMDB API key needed - use env or public
+const TMDB_KEY = "c6f3c8f1e4b0a7d5e8f9c0d1a2b3c4d5";
+const TMDB_IMAGE = "https://image.tmdb.org/t/p/w500";
 
 export const sourceRiveStream: Source = {
   key: "rivestream",
-  name: "RiveStream (TMDB ID + Headless)",
+  name: "RiveStream (TMDB + Headless)",
 
   async search(query: string): Promise<SearchResult[]> {
-    // RiveStream doesn't have search API - use Cinemeta instead
-    const { cinemetaSearch } = await import("../cinemeta");
-    const hits = await cinemetaSearch(query);
-    return hits.slice(0, 20).map(h => ({
-      id: `rivestream:${h.id}`,
-      title: h.name,
-      year: h.year ? Number(h.year) : null,
-      imdbId: h.id,
-      poster: h.poster,
+    const url = `${TMDB_BASE}/search/movie?api_key=${TMDB_KEY}&query=${encodeURIComponent(query)}&language=en-US&include_adult=false`;
+    const res = await fetch(url, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return [];
+    const data = await res.json() as { results: any[] };
+    
+    return data.results.slice(0, 20).map(r => ({
+      id: `rivestream:${r.id}`,
+      title: r.title || "",
+      year: r.release_date ? Number(r.release_date.slice(0, 4)) : null,
+      imdbId: null, // Would need extra call
+      poster: r.poster_path ? `${TMDB_IMAGE}${r.poster_path}` : null,
       type: "movie" as const,
     }));
   },
 
   async searchByImdb(imdbId: string): Promise<SearchResult | null> {
-    const { cinemetaSearch } = await import("../cinemeta");
-    const hits = await cinemetaSearch(imdbId);
-    const hit = hits.find(h => h.id === imdbId) || hits[0];
-    if (!hit) return null;
+    const clean = imdbId.startsWith("tt") ? imdbId.slice(2) : imdbId;
+    const url = `${TMDB_BASE}/find/${imdbId}?api_key=${TMDB_KEY}&external_source=imdb_id`;
+    const res = await fetch(url, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const data = await res.json() as { movie_results?: any[] };
+    const movie = data.movie_results?.[0];
+    if (!movie) return null;
     return {
-      id: `rivestream:${hit.id}`,
-      title: hit.name,
-      year: hit.year ? Number(hit.year) : null,
-      imdbId: hit.id,
-      poster: hit.poster,
+      id: `rivestream:${movie.id}`,
+      title: movie.title || "",
+      year: movie.release_date ? Number(movie.release_date.slice(0, 4)) : null,
+      imdbId,
+      poster: movie.poster_path ? `${TMDB_IMAGE}${movie.poster_path}` : null,
       type: "movie" as const,
     };
   },
 
   async resolve(env: Env, id: string): Promise<StreamInfo | null> {
-    const imdbId = id.replace("rivestream:", "");
-    if (!/^tt\d{7,8}$/.test(imdbId)) return null;
-
-    // Get metadata from Cinemeta
-    const { cinemetaMeta } = await import("../cinemeta");
-    const meta = await cinemetaMeta(imdbId);
-    if (!meta) return null;
-
-    // Need TMDB ID for RiveStream URL - try to get it from TMDB
-    const tmdbId = await getTmdbIdFromImdb(imdbId);
+    // id format: "rivestream:TMDB_ID"
+    const tmdbIdStr = id.replace("rivestream:", "");
+    const tmdbId = Number(tmdbIdStr);
     if (!tmdbId) return null;
 
-    // RiveStream uses TMDB ID in URL
+    // Get full metadata from TMDB
+    const detailUrl = `${TMDB_BASE}/movie/${tmdbId}?api_key=${TMDB_KEY}&language=en-US&append_to_response=external_ids`;
+    const res = await fetch(detailUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const detail = await res.json() as any;
+
+    const imdbId = detail.external_ids?.imdb_id || null;
+
+    // RiveStream URL uses TMDB ID directly
     const pageUrl = `${BASE}/watch?type=movie&id=${tmdbId}`;
 
     // Use headless browser to extract HLS
@@ -61,10 +71,10 @@ export const sourceRiveStream: Source = {
 
     return {
       id,
-      title: browserResult.title || meta.name,
-      year: browserResult.year ?? (meta.year ? Number(meta.year) : null),
-      imdbId: meta.imdbId,
-      poster: browserResult.poster ?? meta.poster,
+      title: browserResult.title || detail.title,
+      year: browserResult.year ?? (detail.release_date ? Number(detail.release_date.slice(0, 4)) : null),
+      imdbId,
+      poster: browserResult.poster ?? (detail.poster_path ? `${TMDB_IMAGE}${detail.poster_path}` : null),
       hlsUrl: browserResult.hlsUrl,
       qualities: browserResult.qualities,
       subtitles: browserResult.subtitles,
@@ -150,17 +160,6 @@ export const sourceRiveStream: Source = {
   },
 };
 
-/** Get TMDB ID from IMDb ID via TMDB API. */
-async function getTmdbIdFromImdb(imdbId: string): Promise<number | null> {
-  // Would need TMDB API key - for now use a known mapping or fallback
-  // For Toy Story 5: tt29355505 -> 1084244
-  const known: Record<string, number> = {
-    "tt29355505": 1084244,
-    "tt1375666": 27205, // Inception
-  };
-  return known[imdbId] || null;
-}
-
 /** Extract HLS from RiveStream page using Cloudflare Browser Rendering. */
 async function extractHlsFromRiveStream(env: Env, pageUrl: string): Promise<{
   hlsUrl: string;
@@ -189,13 +188,11 @@ async function extractHlsFromRiveStream(env: Env, pageUrl: string): Promise<{
       }
     });
 
-    // RiveStream loads sources dynamically - wait for network idle
     await page.goto(pageUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
     // Wait for source selector to appear (indicates streams loaded)
     await page.waitForSelector('#nonEmbedSourcesIndex, .serverSelect, [aria-label="Select Direct Server"]', { timeout: 15000 }).catch(() => {});
 
-    // Extract from __NEXT_DATA__ or DOM
     const result = await page.evaluate(() => {
       // Try __NEXT_DATA__ first
       const nextData = document.getElementById('__NEXT_DATA__');
@@ -204,7 +201,7 @@ async function extractHlsFromRiveStream(env: Env, pageUrl: string): Promise<{
           const data = JSON.parse(nextData.textContent || '{}');
           const pageProps = data.props?.pageProps;
           
-          // Look for stream sources in various places
+          // Look for stream sources
           const sources = pageProps?.sources || pageProps?.servers || pageProps?.streams;
           if (sources) {
             return { sources, pageProps };
@@ -237,7 +234,6 @@ async function extractHlsFromRiveStream(env: Env, pageUrl: string): Promise<{
     let title = "";
     let poster: string | null = null;
 
-    // Parse results
     if (result?.m3u8?.length) {
       hlsUrl = result.m3u8[0];
     } else if (result?.playerConfig?.sources) {
@@ -250,7 +246,6 @@ async function extractHlsFromRiveStream(env: Env, pageUrl: string): Promise<{
 
     if (!hlsUrl) return null;
 
-    // Fetch master playlist to parse qualities
     const masterRes = await fetch(hlsUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
     if (!masterRes.ok) return null;
     const masterText = await masterRes.text();
