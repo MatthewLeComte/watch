@@ -88,8 +88,8 @@ struct LibraryView: View {
 
             VStack(spacing: 0) {
                 // SINGLE HERO CAROUSEL WITH TRAILER
-                heroCarousel(width: w, posterW: posterW, posterH: posterH, infoH: infoH)
-                    .frame(width: w, height: heroH)
+                heroCarousel(posterW: posterW, posterH: posterH, infoH: infoH)
+                    .frame(height: heroH)
                 // SECTIONS BELOW
                 ScrollView(.vertical) {
                     LazyVStack(spacing: 0) {
@@ -109,29 +109,29 @@ struct LibraryView: View {
         }
     }
 
-    private func heroCarousel(width: CGFloat, posterW: CGFloat, posterH: CGFloat, infoH: CGFloat) -> some View {
+    private func heroCarousel(posterW: CGFloat, posterH: CGFloat, infoH: CGFloat) -> some View {
         let movie = heroMovie
         return ZStack(alignment: .top) {
-            // POSTER
+            // POSTER - natural 2:3 aspect, capped at posterH, centered
             if let movie {
                 PosterImage(url: billboardURL(movie), title: movie.displayTitle)
-                    .scaledToFill()
-                    .frame(width: posterW, height: posterH)
-                    .clipped()
-                    .frame(maxWidth: .infinity)
+                    .scaledToFit()
+                    .frame(maxWidth: posterW, maxHeight: posterH)
+                    .frame(maxWidth: .infinity, alignment: .center)
             } else {
-                Color.black.frame(width: posterW, height: posterH).frame(maxWidth: .infinity)
+                Color.black.frame(maxWidth: posterW, maxHeight: posterH)
+                    .frame(maxWidth: .infinity)
             }
-            // TRAILER OVERLAY (full poster area)
+            // TRAILER OVERLAY - same size as poster, transparent until first frame
             if let movie, playing == nil, let url = heroStreamURL {
                 HeroTrailer(url: url, apiKey: url.host?.contains("cornerstonecoatings.com") == true ? library.api.key : nil)
                     .id(url.absoluteString)
                     .allowsHitTesting(false)
-                    .frame(width: posterW, height: posterH)
+                    .frame(maxWidth: posterW, maxHeight: posterH)
                     .clipped()
                     .frame(maxWidth: .infinity)
             }
-            // INFO OVERLAY (bottom of poster)
+            // INFO OVERLAY - gradient at bottom of poster
             if let movie {
                 VStack {
                     Spacer()
@@ -168,14 +168,15 @@ struct LibraryView: View {
                     }
                     .padding(.horizontal, isCompact ? 20 : 32)
                     .padding(.vertical, 14)
-                    .frame(width: width, height: infoH, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         LinearGradient(colors: [.clear, .black.opacity(0.8), .black], startPoint: .top, endPoint: .bottom)
                     )
                 }
-                .frame(height: posterH + infoH)
+                .frame(maxWidth: .infinity)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .top)
     }
 
     private func billboardURL(_ movie: Movie) -> URL? {
@@ -316,9 +317,10 @@ struct LibraryView: View {
     private func play(_ m: Movie) { playing = m }
 }
 
-private struct Shelf: Identifiable { let id: String; let title: String; let movies: [Movie] }
 
+private struct Shelf: Identifiable { let id: String; let title: String; let movies: [Movie] }
 /// Native muted looping trailer. Poster stays underneath until first frame.
+
 private struct HeroTrailer: View {
     var url: URL
     var apiKey: String?
@@ -328,7 +330,7 @@ private struct HeroTrailer: View {
 
     var body: some View {
         ZStack {
-            Color.black
+            // Transparent until first frame - poster shows through
             if let player {
                 HeroPlayerLayer(player: player)
                     .opacity(ready ? 1 : 0)
@@ -393,7 +395,6 @@ private struct HeroPlayerLayer: UIViewRepresentable {
     }
 }
 
-private struct Shelf: Identifiable { let id: String; let title: String; let movies: [Movie] }
 
 /// Trailer resolution without server files: Kinocheck match → Piped MP4.
 enum TrailerResolver {
