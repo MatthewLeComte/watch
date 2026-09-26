@@ -4,6 +4,7 @@ import { ingest, saveCache } from "./ingest";
 import { contentTypeFor, extOf, parseByteRange, parseReleaseName, pickTrailerId, srtToVtt } from "./lib";
 import type { TrailerVideo } from "./lib";
 import { handleWatchMcp } from "./mcp";
+import { search67movies, searchByImdb, resolveMovie, downloadAndIngest, type SearchResult, type StreamInfo } from "./sources/67movies";
 
 /** R2 requires every part except the last to be at least 5 MiB. 8 MiB matches that rule. */
 const PART = 8 * 1024 * 1024;
@@ -95,6 +96,36 @@ export default {
       if (!authorized(request, env.WATCH_KEY || "")) return json({ ok: false, error: "unauthorized" }, 401);
       return handleWatchMcp(request, env);
     }
+
+    // 67movies source endpoints (public search, auth for download)
+    const sourceSearch = path.match(/^\/v1\/sources\/67movies\/search$/i);
+    if (sourceSearch && request.method === "GET") {
+      const q = new URL(request.url).searchParams.get("q") || "";
+      const imdb = new URL(request.url).searchParams.get("imdb") || "";
+      if (imdb) {
+        const result = await searchByImdb(imdb);
+        return json(result ? [result] : []);
+      }
+      if (!q) return json({ error: "query_required" }, 400);
+      return json(await search67movies(q));
+    }
+    const sourceResolve = path.match(/^\/v1\/sources\/67movies\/resolve\/(\d+)$/i);
+    if (sourceResolve && request.method === "GET") {
+      if (!authorized(request, env.WATCH_KEY || "")) return json({ error: "unauthorized" }, 401);
+      return json(await resolveMovie(env, sourceResolve[1]!) ?? { error: "not_found" }, 404);
+    }
+    const sourceDownload = path.match(/^\/v1\/sources\/67movies\/download$/i);
+    if (sourceDownload && request.method === "POST") {
+      if (!authorized(request, env.WATCH_KEY || "")) return json({ error: "unauthorized" }, 401);
+      const body = (await request.json()) as { stream: StreamInfo; quality?: { height: number }; subtitleLang?: string };
+      const stream = body.stream;
+      if (!stream?.hlsUrl) return json({ error: "stream_required" }, 400);
+      const quality = stream.qualities.find(q => q.height === (body.quality?.height ?? stream.qualities[0]?.height)) ?? stream.qualities[0];
+      const subtitle = body.subtitleLang ? stream.subtitles.find(s => s.lang === body.subtitleLang) : undefined;
+      const id = await downloadAndIngest(env, stream, quality, subtitle);
+      return json({ id }, 201);
+    }
+
     if (!authorized(request, env.WATCH_KEY || "")) return json({ error: "unauthorized" }, 401);
     try {
       if (request.method === "GET" && path === "/v1/items") return listItems(env);
