@@ -1,8 +1,7 @@
 import type { Env } from "./env";
 import { cinemetaMeta } from "./cinemeta";
 import { ingest, saveCache } from "./ingest";
-import { contentTypeFor, extOf, parseByteRange, parseReleaseName, pickTrailerId, srtToVtt } from "./lib";
-import type { TrailerVideo } from "./lib";
+import { contentTypeFor, extOf, parseByteRange, parseReleaseName, srtToVtt } from "./lib";
 import { handleWatchMcp } from "./mcp";
 import { SOURCES, type SearchResult, type StreamInfo, type Quality, type SubtitleTrack } from "./sources";
 import "./sources/registry";
@@ -100,7 +99,7 @@ export default {
 
     // ===== FLAT SOURCE ENDPOINTS (no auth for search, simple paths) =====
     // GET /api/sources - list sources
-    if (path === "/api/sources" && request.method === "GET") {
+    if ((path === "/api/sources" || path === "/api/sources/") && request.method === "GET") {
       return json(SOURCES.listSources().map(s => ({ key: s.key, name: s.name })));
     }
 
@@ -126,7 +125,7 @@ export default {
 
     try {
       // GET /api/sources/meta/resolve/:tmdbId - resolve to stream info
-      const resolveMatch = path.match(/^\/api\/sources\/meta\/resolve\/(\d+)$/i);
+      const resolveMatch = path.match(/^\/api\/sources\/meta\/resolve\/(\d+)\/?$/i);
       if (resolveMatch && request.method === "GET") {
         const tmdbId = Number(resolveMatch[1]!);
         const source = SOURCES.get("meta");
@@ -135,7 +134,7 @@ export default {
       }
 
       // POST /api/sources/meta/download - download + ingest
-      const downloadMatch = path.match(/^\/api\/sources\/meta\/download$/i);
+      const downloadMatch = path.match(/^\/api\/sources\/meta\/download\/?$/i);
       if (downloadMatch && request.method === "POST") {
         const source = SOURCES.get("meta");
         if (!source) return json({ error: "source_not_found" }, 404);
@@ -166,6 +165,7 @@ export default {
       if (rest === "playback" && request.method === "GET") return playbackItem(env, id);
       if (rest === "rematch" && request.method === "POST") return rematch(env, id);
       if (rest === "trailer/resolve" && request.method === "POST") return resolveTrailerRoute(env, id);
+      if (rest === "trailer" && request.method === "PUT") return trailerUpload(request, env, id);
       if (rest === "poster" && request.method === "PUT") return putPoster(request, env, id);
       const part = rest.match(/^parts\/(\d+)$/);
       if (part && request.method === "PUT") return uploadPart(request, env, id, Number(part[1]));
@@ -788,81 +788,36 @@ async function media(request: Request, env: Env, id: string): Promise<Response> 
   return json({ error: "use_playback", hls: true }, 409);
 }
 
-// MARK: - Trailers: HD files on R2, deduped by YouTube id, quality-checked.
+// MARK: - Trailers: TMDB → YouTube key, iOS client bridges MP4 → R2
 //
-// Pick: Kinocheck (matched to our IMDb id, English pure trailers, most views).
-// Fetch: Piped API resolves the YouTube id to a direct ≤1080p h264 MP4 URL,
-// which the worker downloads straight into R2. One R2 object per YouTube id,
-// shared by every movie that uses it.
+// Pick: TMDB /find + /movie/{id}/videos (official YouTube Trailer in en-US).
+// Play: iOS plays YouTube in WKWebView (no server-side MP4 download).
+// Cache: iOS extracts HLS, saves via AVAssetDownloadURLSession, uploads to
+//        PUT /v1/items/:id/trailer. Worker stores trailers/{ytId}.mp4 in R2.
+// Serve: GET /v1/items/:id/trailer reads from R2 with byte-range support.
 
-const KINOCHECK = "https://api.kinocheck.com/movies";
-const PIPED_DEFAULTS = [
-  "https://pipedapi.reallyaweso.me",
-  "https://pipedapi.adminforge.de",
-  "https://pipedapi.kavin.rocks",
-];
+const TMDB = "https://api.themoviedb.org/3";
 const TRAILER_MAX_BYTES = 400 * 1024 * 1024;
-const TRAILER_MIN_BYTES = 512 * 1024;
+const TRAILER_MIN_BYTES = 1024;
 
-function pipedInstances(env: Env): string[] {
-  const custom = (env.TRAILER_RESOLVER || "")
-    .split(",")
-    .map((s) => s.trim().replace(/\/+$/, ""))
-    .filter(Boolean);
-  return custom.length > 0 ? custom : PIPED_DEFAULTS;
-}
-
-async function kinocheckTrailerId(imdbId: string): Promise<string | null> {
-  const res = await fetch(`${KINOCHECK}?imdb_id=${encodeURIComponent(imdbId)}&language=en`, {
-    headers: { "User-Agent": "Watch/1", Accept: "application/json" },
+async function tmdbTrailerKey(imdbId: string, env: Env): Promise<string | null> {
+  const apiKey = env.WATCH_TMDB_API_KEY;
+  if (!apiKey) return null;
+  const findRes = await fetch(`${TMDB}/find/${imdbId}?api_key=${apiKey}&external_source=imdb_id`, {
+    headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(8000),
   });
-  if (!res.ok) {
-    console.log(`Kinocheck returned ${res.status} for ${imdbId}`);
-    return null;
-  }
-  const obj = (await res.json()) as { trailer?: TrailerVideo; videos?: TrailerVideo[] };
-  const ytId = pickTrailerId(obj);
-  if (!ytId) console.log(`Kinocheck no trailer for ${imdbId}`);
-  return ytId;
-}
-
-type PipedStream = { fileUrl: string; quality: string };
-
-async function pipedStream(env: Env, ytId: string): Promise<PipedStream | null> {
-  for (const base of pipedInstances(env)) {
-    try {
-      const res = await fetch(`${base}/streams/${ytId}`, {
-        headers: { "User-Agent": "Watch/1", Accept: "application/json" },
-      });
-      if (!res.ok) {
-        console.log(`Piped ${base} returned ${res.status} for ${ytId}`);
-        continue;
-      }
-      const obj = (await res.json()) as {
-        videoStreams?: Array<{ url?: string; quality?: string; codec?: string; mimeType?: string; format?: string }>;
-      };
-      const cands: Array<{ url: string; h: number }> = [];
-      for (const s of obj.videoStreams ?? []) {
-        if (!s.url) continue;
-        const m = /^(\d+)p/.exec(s.quality ?? "");
-        if (!m) continue;
-        const h = Number(m[1]);
-        if (h < 720 || h > 1080) continue;
-        const codec = (s.codec ?? "").toLowerCase();
-        const mime = (s.mimeType ?? "").toLowerCase();
-        const format = (s.format ?? "").toLowerCase();
-        if (!codec.includes("avc") && !mime.includes("mp4") && !format.includes("mp4")) continue;
-        cands.push({ url: s.url, h });
-      }
-      cands.sort((a, b) => b.h - a.h);
-      if (cands[0]) return { fileUrl: cands[0].url, quality: `${cands[0].h}p` };
-    } catch (e) {
-      console.log(`Piped ${base} error for ${ytId}: ${e instanceof Error ? e.message : e}`);
-      continue;
-    }
-  }
-  console.log(`All Piped instances failed for ${ytId}`);
-  return null;
+  if (!findRes.ok) return null;
+  const find = await findRes.json() as { movie_results?: { id: number }[] };
+  const tmdbId = find.movie_results?.[0]?.id;
+  if (!tmdbId) return null;
+  const vRes = await fetch(`${TMDB}/movie/${tmdbId}/videos?api_key=${apiKey}&language=en-US`, {
+    headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(8000),
+  });
+  if (!vRes.ok) return null;
+  const v = await vRes.json() as { results?: { site: string; type: string; official: boolean; key: string }[] };
+  const trailers = (v.results ?? []).filter(x => x.site === "YouTube" && x.type === "Trailer");
+  const pick = trailers.find(x => x.official) ?? trailers[0];
+  return pick?.key ?? null;
 }
 
 type ResolveResult = { http: number; body: Record<string, unknown> };
@@ -888,58 +843,67 @@ async function resolveTrailerFile(env: Env, id: string): Promise<ResolveResult> 
     .first<{ id: string; imdb_id: string | null; trailer_key: string | null; trailer_status: string | null; trailer_r2_key: string | null }>();
   if (!movie) return { http: 404, body: { ok: false, error: "not_found" } };
   if (movie.trailer_status === "ready" && movie.trailer_r2_key && (await env.watch_bucket.head(movie.trailer_r2_key))) {
-    return { http: 200, body: { ok: true, deduped: true } };
+    return { http: 200, body: { ok: true, deduped: true, trailerStatus: "ready" } };
   }
-  console.log(`Resolving trailer for ${id}: imdb=${movie.imdb_id}, key=${movie.trailer_key}, status=${movie.trailer_status}`);
-  const ytId = movie.trailer_key || (movie.imdb_id ? await kinocheckTrailerId(movie.imdb_id) : null);
+  const ytId = movie.trailer_key || (movie.imdb_id ? await tmdbTrailerKey(movie.imdb_id, env) : null);
   if (!ytId) {
     await markTrailer(env, id, { status: "failed", note: "no_trailer_found" });
     return { http: 404, body: { ok: false, error: "no_trailer_found" } };
   }
-  console.log(`Found YouTube ID ${ytId} for ${id}`);
+  const watchUrl = `https://www.youtube.com/watch?v=${ytId}`;
+  if (movie.trailer_key !== ytId) {
+    await env.watch.prepare("UPDATE movie SET trailer_key = ?, trailer_url = ?, updated_at = ? WHERE id = ?")
+      .bind(ytId, watchUrl, new Date().toISOString(), id).run();
+  }
   const key = `trailers/${ytId}.mp4`;
   if (await env.watch_bucket.head(key)) {
     const existing = await env.watch
-      .prepare("SELECT trailer_bytes, trailer_quality FROM movie WHERE trailer_r2_key = ? LIMIT 1")
+      .prepare("SELECT trailer_bytes FROM movie WHERE trailer_r2_key = ? LIMIT 1")
       .bind(key)
-      .first<{ trailer_bytes: number | null; trailer_quality: string | null }>();
-    await markTrailer(env, id, {
-      r2: key,
-      bytes: existing?.trailer_bytes ?? null,
-      quality: existing?.trailer_quality ?? null,
-      status: "ready",
-      note: "deduped",
-    });
-    return { http: 200, body: { ok: true, deduped: true, quality: existing?.trailer_quality ?? null } };
+      .first<{ trailer_bytes: number | null }>();
+    await markTrailer(env, id, { r2: key, bytes: existing?.trailer_bytes ?? null, status: "ready", note: "deduped" });
+    return { http: 200, body: { ok: true, deduped: true, ytId, watchUrl, trailerStatus: "ready" } };
   }
-  const stream = await pipedStream(env, ytId);
-  if (!stream) {
-    await markTrailer(env, id, { status: "failed", note: "no_hd_stream" });
-    return { http: 502, body: { ok: false, error: "no_hd_stream" } };
-  }
-  console.log(`Downloading trailer ${ytId} from ${stream.fileUrl} (${stream.quality})`);
-  const up = await fetch(stream.fileUrl, { headers: { "User-Agent": "Watch/1" } });
-  const ctype = up.headers.get("content-type") || "";
-  const clen = Number(up.headers.get("content-length") || "0");
-  if (!up.ok || !up.body || !ctype.startsWith("video/") || clen > TRAILER_MAX_BYTES || (clen > 0 && clen < TRAILER_MIN_BYTES)) {
-    await markTrailer(env, id, { status: "failed", note: "bad_upstream" });
-    return { http: 502, body: { ok: false, error: "bad_upstream" } };
-  }
-  await env.watch_bucket.put(key, up.body, { httpMetadata: { contentType: "video/mp4" } });
-  const bytes = (await env.watch_bucket.head(key))?.size ?? 0;
-  if (bytes < TRAILER_MIN_BYTES) {
-    await env.watch_bucket.delete(key);
-    await markTrailer(env, id, { status: "failed", note: "too_small" });
-    return { http: 502, body: { ok: false, error: "too_small" } };
-  }
-  await markTrailer(env, id, { r2: key, bytes, quality: stream.quality, status: "ready" });
-  console.log(`Trailer ready for ${id}: ${bytes} bytes, ${stream.quality}`);
-  return { http: 200, body: { ok: true, deduped: false, quality: stream.quality, bytes } };
+  await markTrailer(env, id, { status: "missing", note: "awaiting_client_upload" });
+  return { http: 200, body: { ok: true, deduped: false, ytId, watchUrl, trailerStatus: "missing" } };
 }
 
 async function resolveTrailerRoute(env: Env, id: string): Promise<Response> {
   const r = await resolveTrailerFile(env, id);
   return json(r.body, r.http);
+}
+
+async function trailerUpload(request: Request, env: Env, id: string): Promise<Response> {
+  if (!authorized(request, env.WATCH_KEY || "") && !queryKey(request, env)) {
+    return json({ error: "unauthorized" }, 401);
+  }
+  const movie = await env.watch
+    .prepare("SELECT trailer_key FROM movie WHERE id = ?")
+    .bind(id)
+    .first<{ trailer_key: string | null }>();
+  if (!movie) return json({ error: "not_found" }, 404);
+  if (!movie.trailer_key) return json({ error: "no_youtube_key" }, 400);
+  const ct = request.headers.get("content-type") || "";
+  if (!ct.startsWith("video/")) return json({ error: "bad_content_type" }, 400);
+  const body = await request.arrayBuffer();
+  if (body.byteLength < TRAILER_MIN_BYTES) return json({ error: "too_small" }, 400);
+  if (body.byteLength > TRAILER_MAX_BYTES) return json({ error: "too_large" }, 400);
+  const key = `trailers/${movie.trailer_key}.mp4`;
+  await env.watch_bucket.put(key, body, { httpMetadata: { contentType: "video/mp4" } });
+  await env.watch.prepare(
+    "UPDATE movie SET trailer_r2_key = ?, trailer_bytes = ?, trailer_status = 'ready', trailer_note = 'uploaded', updated_at = ? WHERE id = ?"
+  ).bind(key, body.byteLength, new Date().toISOString(), id).run();
+  const dupes = await env.watch
+    .prepare("SELECT id FROM movie WHERE trailer_key = ? AND id != ?")
+    .bind(movie.trailer_key, id)
+    .all<{ id: string }>();
+  for (const d of dupes.results ?? []) {
+    await env.watch.prepare(
+      "UPDATE movie SET trailer_r2_key = ?, trailer_bytes = ?, trailer_status = 'ready', trailer_note = 'deduped', updated_at = ? WHERE id = ?"
+    ).bind(key, body.byteLength, new Date().toISOString(), d.id).run();
+  }
+  console.log(`Trailer uploaded for ${id}: ${body.byteLength} bytes, deduped=${dupes.results?.length ?? 0}`);
+  return json({ ok: true, key, bytes: body.byteLength, deduped: dupes.results?.length ?? 0 });
 }
 
 /** Self-healing schema: D1 migrations only run when the deploy pipeline runs
@@ -968,13 +932,24 @@ async function backfillTrailers(request: Request, env: Env): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as { limit?: number };
   const limit = Math.min(Math.max(Number(body.limit) || 20, 1), 50);
   const rows = await env.watch
-    .prepare("SELECT id, title, imdb_id, trailer_key, trailer_status FROM movie WHERE trailer_status IS NULL OR trailer_status IN ('missing','failed') ORDER BY created_at ASC LIMIT ?")
+    .prepare("SELECT id, title, imdb_id FROM movie WHERE imdb_id IS NOT NULL AND (trailer_key IS NULL OR trailer_status IN ('missing','failed')) ORDER BY created_at ASC LIMIT ?")
     .bind(limit)
-    .all<{ id: string; title: string; imdb_id: string | null; trailer_key: string | null; trailer_status: string | null }>();
+    .all<{ id: string; title: string; imdb_id: string | null }>();
   const results: Array<Record<string, unknown>> = [];
   for (const r of rows.results ?? []) {
-    const out = await resolveTrailerFile(env, r.id);
-    results.push({ id: r.id, title: r.title, imdbId: r.imdb_id, trailerKey: r.trailer_key, prevStatus: r.trailer_status, ...out.body });
+    const ytId = await tmdbTrailerKey(r.imdb_id!, env);
+    if (ytId) {
+      const watchUrl = `https://www.youtube.com/watch?v=${ytId}`;
+      await env.watch.prepare(
+        "UPDATE movie SET trailer_key = ?, trailer_url = ?, trailer_status = 'missing', trailer_note = 'awaiting_client_upload', updated_at = ? WHERE id = ?"
+      ).bind(ytId, watchUrl, new Date().toISOString(), r.id).run();
+      results.push({ id: r.id, title: r.title, imdbId: r.imdb_id, ytId, watchUrl, ok: true });
+    } else {
+      await env.watch.prepare(
+        "UPDATE movie SET trailer_status = 'failed', trailer_note = 'no_tmdb_trailer', updated_at = ? WHERE id = ?"
+      ).bind(new Date().toISOString(), r.id).run();
+      results.push({ id: r.id, title: r.title, imdbId: r.imdb_id, ok: false });
+    }
   }
   return json({ ok: true, processed: results.length, results });
 }
@@ -1154,10 +1129,8 @@ function toItem(row: MovieRow, subs: SubRow[]) {
     readyToStream: Boolean(row.ready_to_stream),
     posterUrl: `https://watch.cornerstonecoatings.com/v1/items/${row.id}/poster`,
     backdropUrl: `https://watch.cornerstonecoatings.com/v1/items/${row.id}/backdrop`,
-    trailerSite: row.trailer_site,
-    trailerKey: row.trailer_key,
-    trailerUrl: row.trailer_url,
-    trailerFileUrl: row.trailer_r2_key ? `https://watch.cornerstonecoatings.com/v1/items/${row.id}/trailer` : null,
+    trailer: row.trailer_url,
+    trailerFile: row.trailer_r2_key ? `https://watch.cornerstonecoatings.com/v1/items/${row.id}/trailer` : null,
     trailerStatus: row.trailer_status ?? "missing",
     status: row.status,
     matchSource: row.match_source,
