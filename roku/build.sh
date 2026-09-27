@@ -21,24 +21,23 @@ if [ -f ".env" ]; then
   if [ -n "$_OVERRIDE_PASS" ]; then ROKU_DEV_PASSWORD="$_OVERRIDE_PASS"; fi
 fi
 
-if [ -z "${WATCH_PUBLIC_KEY:-}" ] || [ -z "${WATCH_PRIVATE_KEY:-}" ]; then
-  echo "ERROR: WATCH_PUBLIC_KEY / WATCH_PRIVATE_KEY not set. Export them or create .env (see .env.example)."
+if [ -z "${WATCH_KEY:-}" ]; then
+  echo "ERROR: WATCH_KEY not set. Export it or add it to .env. Same value the iOS app sends as Bearer."
   exit 1
 fi
 
-echo "Building with key ID: ${WATCH_PUBLIC_KEY:0:8}..."
+echo "Building with library key (${#WATCH_KEY} chars)..."
 
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 cp -r manifest source components images "$STAGE/"
 
-python3 - "$STAGE/source/Auth.brs" "$WATCH_PUBLIC_KEY" "$WATCH_PRIVATE_KEY" <<'EOF'
+python3 - "$STAGE/source/Main.brs" "$WATCH_KEY" <<'EOF'
 import sys
-path, pub, priv = sys.argv[1], sys.argv[2], sys.argv[3]
+path, key = sys.argv[1], sys.argv[2]
 src = open(path).read()
-assert src.count("__WATCH_PUBLIC_KEY__") == 1, "public key placeholder missing or duplicated"
-assert src.count("__WATCH_PRIVATE_KEY__") == 1, "private key placeholder missing or duplicated"
-src = src.replace("__WATCH_PUBLIC_KEY__", pub).replace("__WATCH_PRIVATE_KEY__", priv)
+assert src.count("__WATCH_KEY__") == 1, "library key placeholder missing or duplicated"
+src = src.replace("__WATCH_KEY__", key)
 open(path, "w").write(src)
 EOF
 

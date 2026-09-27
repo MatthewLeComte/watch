@@ -71,10 +71,10 @@ sub StartPlayback(it as Object)
   print "Playing: " + it.itemId
   m.playTries = 0
   content = CreateObject("roSGNode", "ContentNode")
-  content.url = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/media"
+  content.url = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/media?key=" + m.reg.Read("apiKey")
   content.streamFormat = "mp4"
   content.title = it.itemTitle
-  content.HttpHeaders = AuthHeaderList()
+  content.HttpHeaders = ["Authorization: Bearer " + m.reg.Read("apiKey")]
   m.player.content = content
   m.player.visible = true
   m.grid.visible = false

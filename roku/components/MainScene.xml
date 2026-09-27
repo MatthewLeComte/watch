@@ -41,6 +41,5 @@
       color="0xFFFFFFFF"
       />
   </children>
-  <script type="text/brightscript" uri="pkg:/source/Auth.brs" />
   <script type="text/brightscript" uri="pkg:/source/MainScene.brs" />
 </component>

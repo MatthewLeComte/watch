@@ -35,11 +35,9 @@ installed version from `:8060/query/apps` matches the manifest.
 
 ## Auth (worker gate)
 
-Catalog + media require all three headers; posters stay public (Roku
-`Poster` nodes can't send headers; URLs are unguessable UUIDs).
+Same auth as the iOS app. `build.sh` injects `WATCH_KEY` into `Main.brs`.
 
-- `WATCH_PUBLIC_KEY` / `WATCH_SIGNATURE` / `WATCH_TIMESTAMP` / `WATCH_NONCE`
-  (`roku/source/Auth.brs` signs `timestamp.nonce` with `roDSA` Ed25519).
-  The public and private key strings are injected by `build.sh` from `.env`.
-- Sign immediately before the request. The worker rejects a timestamp
-  more than 30 seconds off.
+- Catalog is `GET /v1/items` with `Authorization: Bearer <WATCH_KEY>`.
+- Playback is `/v1/items/{id}/media?key=<WATCH_KEY>` plus the same Bearer
+  header. The query param stays on Range follow-ups.
+- Posters stay public.

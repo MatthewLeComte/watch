@@ -10,10 +10,10 @@ Sub Main()
   for i = 0 to catalog.Count() - 1
     if i > 0 then json = json + ","
     it = catalog[i]
-    t = it.title
-    u = it.HDPosterUrl
-    d = it.itemId
-    ti = it.itemTitle
+    t = JsonEscape(it.title)
+    u = JsonEscape(it.HDPosterUrl)
+    d = JsonEscape(it.itemId)
+    ti = JsonEscape(it.itemTitle)
     json = json + "{""title"":""" + t + """,""HDPosterUrl"":""" + u + """,""itemId"":""" + d + """,""itemTitle"":""" + ti + """}"
   end for
   json = json + "]"
@@ -47,6 +47,10 @@ Sub Main()
   end while
 End Sub
 
+function LibraryKey() as String
+  return "__WATCH_KEY__"
+end function
+
 function GetDeviceId() as String
   reg = CreateObject("roRegistrySection", "WatchCache")
   id = reg.Read("deviceId")
@@ -59,8 +63,7 @@ end function
 
 sub EnsureKeys()
   reg = CreateObject("roRegistrySection", "WatchCache")
-  reg.Write("keyId", PublicKey())
-  reg.Write("apiKey", PrivateKey())
+  reg.Write("apiKey", LibraryKey())
   reg.Write("deviceId", GetDeviceId())
   reg.Flush()
 end sub
@@ -78,18 +81,22 @@ sub WriteChunks(reg as Object, key as String, value as String)
   reg.Flush()
 end sub
 
+function JsonEscape(value as Dynamic) as String
+  if value = invalid then return ""
+  s = value
+  if type(s) <> "String" and type(s) <> "roString" then s = Str(s)
+  s = s.Replace(Chr(92), Chr(92) + Chr(92))
+  s = s.Replace(Chr(34), Chr(92) + Chr(34))
+  return s
+end function
+
 function FetchCatalog() as Object
   u = CreateObject("roUrlTransfer")
-  u.SetUrl("https://watch.cornerstonecoatings.com/v1/catalog")
-  h = AuthHeaders()
-  u.AddHeader("WATCH_PUBLIC_KEY", h.WATCH_PUBLIC_KEY)
-  u.AddHeader("WATCH_SIGNATURE", h.WATCH_SIGNATURE)
-  u.AddHeader("WATCH_TIMESTAMP", h.WATCH_TIMESTAMP)
-  u.AddHeader("WATCH_NONCE", h.WATCH_NONCE)
-  u.SetCertificatesFile("common:/certs/ca-bundle.crt")
+  u.SetUrl("https://watch.cornerstonecoatings.com/v1/items")
+  u.AddHeader("Authorization", "Bearer " + LibraryKey())
   resp = u.GetToString()
   print "Fetch len: " + StrI(Len(resp))
-  if resp = invalid then return invalid
+  if resp = invalid or Len(resp) = 0 then return invalid
   
   j = ParseJSON(resp)
   if j = invalid or j.items = invalid then return invalid
