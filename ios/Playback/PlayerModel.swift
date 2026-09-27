@@ -30,9 +30,8 @@ final class PlayerModel {
         if let local {
             asset = AVURLAsset(url: local)
         } else {
-            // Native HTTPS streaming with range requests. Key travels in the
-            // URL (headers can be dropped on range follow-ups); Bearer kept too.
-            let mediaURL = "\(api.base)/v1/items/\(movie.id)/media?key=\(api.key)"
+            // HLS playlist. The key is on the playlist and every segment URL.
+            let mediaURL = "\(api.base)/v1/items/\(movie.id)/index.m3u8?key=\(api.key)"
             guard let url = URL(string: mediaURL) else { return }
             asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(api.key)"]])
         }

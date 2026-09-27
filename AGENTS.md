@@ -38,3 +38,9 @@ App icon is Eden pixel1, label `Watch`. Generator: `Work/Tooling/generate-wordma
 | Playback and offline file | `ios/Playback/`, `ios/Model/MediaStore.swift` |
 | Xcode project | `ios/project.yml` then `xcodegen generate` |
 | Roku channel | `roku/` (see `roku/AGENTS.md`) |
+
+## Later: pre-encode
+
+Not started. Playback already slices the current MP4 into HLS. A later reupload can replace a file with one smaller encode. Same one-object rule. No segment files.
+
+Run it only when average bitrate is over 4 Mbps or the keyframe gap is over 6 seconds. That is Inside Out 2, Tangled, The Martian, Across the Bridge, Surf's Up, Interstellar, and the other titles near a 10 second keyframe. HEVC `hvc1`, AAC, closed GOP every 2 seconds. Try settings on one minute, keep the smallest that stays at VMAF 98 against the current picture, then encode the movie once. If it misses 98, leave the current file. Do not re-encode the 2 Mbps majority. Do not encode inside the worker.

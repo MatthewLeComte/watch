@@ -1,6 +1,7 @@
 import type { Env } from "./env";
 import { cinemetaMeta } from "./cinemeta";
 import { ingest, saveCache } from "./ingest";
+import { muxSegment, planSegments, playlist, segmentSpan, shiftPlan } from "./hls";
 import { contentTypeFor, extOf, parseByteRange, parseReleaseName, srtToVtt } from "./lib";
 import { handleWatchMcp } from "./mcp";
 import { SOURCES, type SearchResult, type StreamInfo, type Quality, type SubtitleTrack } from "./sources";
@@ -73,6 +74,16 @@ export default {
       const id = asset[1]!;
       const kind = asset[2]!.toLowerCase();
       return kind === "poster" ? posterAsset(env, id, request) : backdropAsset(env, id, request);
+    }
+    const hlsPlaylist = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/index\.m3u8$/i);
+    if (hlsPlaylist && request.method === "GET") {
+      if (!(await streamAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
+      return hlsIndex(request, env, hlsPlaylist[1]!);
+    }
+    const hlsSeg = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/seg\/(\d+)\.ts$/i);
+    if (hlsSeg && request.method === "GET") {
+      if (!(await streamAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
+      return hlsSegment(env, hlsSeg[1]!, Number(hlsSeg[2]));
     }
     const publicMedia = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/media$/i);
     if (publicMedia && (request.method === "GET" || request.method === "HEAD")) {
@@ -179,6 +190,74 @@ export default {
     }
   },
 } satisfies ExportedHandler<Env>;
+
+async function streamAuthorized(request: Request, env: Env): Promise<boolean> {
+  if (authorized(request, env.WATCH_KEY || "") || queryKey(request, env)) return true;
+  return rokuAuthorized(request, env);
+}
+
+const hlsPlans = new Map<string, ReturnType<typeof planSegments>>();
+
+async function moviePrefix(env: Env, id: string): Promise<Uint8Array | null> {
+  const head = await rangedGet(env, id, 0, 65536);
+  if (!head) return null;
+  const buf = new Uint8Array(await head.arrayBuffer());
+  if (buf.length < 16 || String.fromCharCode(...buf.subarray(4, 8)) !== "ftyp") return null;
+  const ftyp = (buf[0]! << 24) | (buf[1]! << 16) | (buf[2]! << 8) | buf[3]!;
+  if (ftyp + 8 > buf.length) return null;
+  const moov = (buf[ftyp]! << 24) | (buf[ftyp + 1]! << 16) | (buf[ftyp + 2]! << 8) | buf[ftyp + 3]!;
+  const need = ftyp + moov;
+  if (need <= buf.length) return buf.subarray(0, need);
+  if (need > 16 * 1024 * 1024) return null;
+  const full = await rangedGet(env, id, 0, need);
+  if (!full) return null;
+  return new Uint8Array(await full.arrayBuffer());
+}
+
+async function plansFor(env: Env, id: string) {
+  const hit = hlsPlans.get(id);
+  if (hit) return hit;
+  const prefix = await moviePrefix(env, id);
+  if (!prefix) return null;
+  const plans = planSegments(prefix);
+  if (plans.length === 0) return null;
+  if (hlsPlans.size > 4) hlsPlans.clear();
+  hlsPlans.set(id, plans);
+  return plans;
+}
+
+async function hlsIndex(request: Request, env: Env, id: string): Promise<Response> {
+  const plans = await plansFor(env, id);
+  if (!plans) return json({ error: "not_playable" }, 404);
+  const url = new URL(request.url);
+  const key = url.searchParams.get("key");
+  const q = key ? `?key=${encodeURIComponent(key)}` : "";
+  const body = playlist(plans, (n) => `${url.origin}/v1/items/${id}/seg/${n}.ts${q}`);
+  return new Response(body, {
+    headers: {
+      "content-type": "application/vnd.apple.mpegurl",
+      "cache-control": "private, max-age=60",
+    },
+  });
+}
+
+async function hlsSegment(env: Env, id: string, n: number): Promise<Response> {
+  const plans = await plansFor(env, id);
+  const plan = plans?.[n];
+  if (!plan) return json({ error: "not_found" }, 404);
+  const span = segmentSpan(plan);
+  if (!span) return json({ error: "segment_too_large" }, 416);
+  const obj = await rangedGet(env, id, span.offset, span.length);
+  if (!obj) return json({ error: "missing_object" }, 404);
+  const bytes = new Uint8Array(await obj.arrayBuffer());
+  const ts = muxSegment(bytes, shiftPlan(plan, span.offset));
+  return new Response(ts, {
+    headers: {
+      "content-type": "video/mp2t",
+      "cache-control": "public, max-age=86400",
+    },
+  });
+}
 
 function authorized(request: Request, key: string): boolean {
   if (!key) return false;
@@ -800,24 +879,44 @@ const TMDB = "https://api.themoviedb.org/3";
 const TRAILER_MAX_BYTES = 400 * 1024 * 1024;
 const TRAILER_MIN_BYTES = 1024;
 
+type TmdbVideo = { site?: string; type?: string; official?: boolean; key?: string; iso_639_1?: string };
+
+async function tmdbGet(env: Env, pathAndQuery: string): Promise<Response | null> {
+  const headers: Record<string, string> = { "User-Agent": "Watch/1", Accept: "application/json" };
+  let url = `${TMDB}${pathAndQuery}`;
+  if (env.WATCH_TMDB_API_READ_ACCESS_TOKEN) {
+    headers.Authorization = `Bearer ${env.WATCH_TMDB_API_READ_ACCESS_TOKEN}`;
+  } else if (env.WATCH_TMDB_API_KEY) {
+    url += `${url.includes("?") ? "&" : "?"}api_key=${encodeURIComponent(env.WATCH_TMDB_API_KEY)}`;
+  } else {
+    return null;
+  }
+  return fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+}
+
+function pickYouTubeKey(results: TmdbVideo[] | undefined): string | null {
+  const yt = (results ?? []).filter((x) => x.site === "YouTube" && x.key);
+  const trailers = yt.filter((x) => x.type === "Trailer");
+  const pool = trailers.length ? trailers : yt.filter((x) => x.type === "Teaser");
+  const english = pool.filter((x) => !x.iso_639_1 || x.iso_639_1 === "en");
+  const list = english.length ? english : pool;
+  return (list.find((x) => x.official) ?? list[0])?.key ?? null;
+}
+
 async function tmdbTrailerKey(imdbId: string, env: Env): Promise<string | null> {
-  const apiKey = env.WATCH_TMDB_API_KEY;
-  if (!apiKey) return null;
-  const findRes = await fetch(`${TMDB}/find/${imdbId}?api_key=${apiKey}&external_source=imdb_id`, {
-    headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(8000),
-  });
-  if (!findRes.ok) return null;
+  const findRes = await tmdbGet(env, `/find/${encodeURIComponent(imdbId)}?external_source=imdb_id`);
+  if (!findRes?.ok) return null;
   const find = await findRes.json() as { movie_results?: { id: number }[] };
   const tmdbId = find.movie_results?.[0]?.id;
   if (!tmdbId) return null;
-  const vRes = await fetch(`${TMDB}/movie/${tmdbId}/videos?api_key=${apiKey}&language=en-US`, {
-    headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(8000),
-  });
-  if (!vRes.ok) return null;
-  const v = await vRes.json() as { results?: { site: string; type: string; official: boolean; key: string }[] };
-  const trailers = (v.results ?? []).filter(x => x.site === "YouTube" && x.type === "Trailer");
-  const pick = trailers.find(x => x.official) ?? trailers[0];
-  return pick?.key ?? null;
+  for (const query of ["?language=en-US", ""]) {
+    const vRes = await tmdbGet(env, `/movie/${tmdbId}/videos${query}`);
+    if (!vRes?.ok) continue;
+    const v = await vRes.json() as { results?: TmdbVideo[] };
+    const key = pickYouTubeKey(v.results);
+    if (key) return key;
+  }
+  return null;
 }
 
 type ResolveResult = { http: number; body: Record<string, unknown> };
@@ -864,8 +963,8 @@ async function resolveTrailerFile(env: Env, id: string): Promise<ResolveResult> 
     await markTrailer(env, id, { r2: key, bytes: existing?.trailer_bytes ?? null, status: "ready", note: "deduped" });
     return { http: 200, body: { ok: true, deduped: true, ytId, watchUrl, trailerStatus: "ready" } };
   }
-  await markTrailer(env, id, { status: "missing", note: "awaiting_client_upload" });
-  return { http: 200, body: { ok: true, deduped: false, ytId, watchUrl, trailerStatus: "missing" } };
+  await markTrailer(env, id, { status: "youtube", note: "tmdb" });
+  return { http: 200, body: { ok: true, deduped: false, ytId, watchUrl, trailerStatus: "youtube" } };
 }
 
 async function resolveTrailerRoute(env: Env, id: string): Promise<Response> {
@@ -929,6 +1028,7 @@ async function ensureTrailerSchema(env: Env): Promise<void> {
 }
 
 async function backfillTrailers(request: Request, env: Env): Promise<Response> {
+  await ensureTrailerSchema(env);
   const body = (await request.json().catch(() => ({}))) as { limit?: number };
   const limit = Math.min(Math.max(Number(body.limit) || 20, 1), 50);
   const rows = await env.watch
@@ -941,7 +1041,7 @@ async function backfillTrailers(request: Request, env: Env): Promise<Response> {
     if (ytId) {
       const watchUrl = `https://www.youtube.com/watch?v=${ytId}`;
       await env.watch.prepare(
-        "UPDATE movie SET trailer_key = ?, trailer_url = ?, trailer_status = 'missing', trailer_note = 'awaiting_client_upload', updated_at = ? WHERE id = ?"
+        "UPDATE movie SET trailer_key = ?, trailer_url = ?, trailer_status = 'youtube', trailer_note = 'tmdb', updated_at = ? WHERE id = ?"
       ).bind(ytId, watchUrl, new Date().toISOString(), r.id).run();
       results.push({ id: r.id, title: r.title, imdbId: r.imdb_id, ytId, watchUrl, ok: true });
     } else {
@@ -955,6 +1055,7 @@ async function backfillTrailers(request: Request, env: Env): Promise<Response> {
 }
 
 async function trailerFile(request: Request, env: Env, id: string): Promise<Response> {
+  await ensureTrailerSchema(env);
   const row = await env.watch
     .prepare("SELECT trailer_r2_key, trailer_bytes FROM movie WHERE id = ?")
     .bind(id)
@@ -1129,6 +1230,8 @@ function toItem(row: MovieRow, subs: SubRow[]) {
     readyToStream: Boolean(row.ready_to_stream),
     posterUrl: `https://watch.cornerstonecoatings.com/v1/items/${row.id}/poster`,
     backdropUrl: `https://watch.cornerstonecoatings.com/v1/items/${row.id}/backdrop`,
+    trailerKey: row.trailer_key,
+    trailerUrl: row.trailer_url,
     trailer: row.trailer_url,
     trailerFile: row.trailer_r2_key ? `https://watch.cornerstonecoatings.com/v1/items/${row.id}/trailer` : null,
     trailerStatus: row.trailer_status ?? "missing",
