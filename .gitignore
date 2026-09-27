@@ -8,3 +8,5 @@ DerivedData
 xcuserdata
 .swiftpm
 .enc-test
+
+/build

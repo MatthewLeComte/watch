@@ -37,14 +37,15 @@ export const sourceMeta: Source = {
     const res = await fetch(detailUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(8000) });
     if (!res.ok) return null;
     const detail = await res.json() as any;
-    return {
+    const result: SearchResult = {
       id: `meta:${tmdbId}`,
       title: detail.title || "",
       year: detail.release_date ? Number(detail.release_date.slice(0, 4)) : null,
-      imdbId,
+      imdbId: imdbId,
       poster: detail.poster_path ? `${TMDB_IMAGE}${detail.poster_path}` : null,
-      type: "movie" as const,
-    });
+      type: "movie"
+    };
+    return result;
   },
 
   async resolve(env: Env, id: string): Promise<StreamInfo | null> {
@@ -155,96 +156,3 @@ export const sourceMeta: Source = {
     return id;
   },
 };
-
-async function completeHlsUpload(env: Env, id: string, size: number, segments: number): Promise<void> {
-  const row = await env.watch.prepare("SELECT upload_id, parts_json FROM upload WHERE movie_id = ?").bind(id).first<{ upload_id: string; parts_json: string }>();
-  if (!row) throw new Error("no_upload");
-  const parts = JSON.parse(row.parts_json) as { partNumber: number; etag: string }[];
-  await env.watch_bucket.resumeMultipartUpload(`video/${id}`, row.upload_id).complete(
-    parts.map(p => ({ partNumber: p.partNumber, etag: p.etag }))
-  );
-  await env.watch.prepare("DELETE FROM upload WHERE movie_id = ?").bind(id).run();
-}
-
-function parseMasterPlaylist(text: string, masterUrl: string): { qualities: Quality[]; subtitles: SubtitleTrack[] } {
-  const qualities: Quality[] = [];
-  const subtitles: SubtitleTrack[] = [];
-  const lines = text.split("\n");
-  let current: Partial<Quality> = {};
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("#EXT-X-STREAM-INF:")) {
-      current = parseStreamInf(trimmed);
-    } else if (trimmed.startsWith("#EXT-X-MEDIA:")) {
-      const sub = parseMedia(trimmed, masterUrl);
-      if (sub) subtitles.push(sub);
-    } else if (trimmed && !trimmed.startsWith("#")) {
-      if (current.height) {
-        qualities.push({ ...current, uri: trimmed } as Quality);
-        current = {};
-      }
-    }
-  }
-  return { qualities, subtitles };
-}
-
-function parseStreamInf(line: string): Partial<Quality> {
-  const attrs: Record<string, string> = {};
-  const regex = /([A-Z-]+)=("(?:[^"]*)"|[^,]+)/g;
-  let m;
-  while ((m = regex.exec(line)) !== null) {
-    attrs[m[1]] = m[2].replace(/^"|"$/g, "");
-  }
-  const res = attrs.RESOLUTION?.match(/(\d+)x(\d+)/);
-  const height = res ? Number(res[2]) : 0;
-  const bandwidth = Number(attrs.BANDWIDTH || "0");
-  const codecs = attrs.CODECS || "";
-  return { height, bandwidth, codecs };
-}
-
-function parseMedia(line: string, masterUrl: string): SubtitleTrack | null {
-  const attrs: Record<string, string> = {};
-  const regex = /([A-Z-]+)=("(?:[^"]*)"|[^,]+)/g;
-  let m;
-  while ((m = regex.exec(line)) !== null) {
-    attrs[m[1]] = m[2].replace(/^"|"$/g, "");
-  }
-  if (attrs.TYPE !== "SUBTITLES") return null;
-  return {
-    lang: attrs.LANGUAGE || "und",
-    label: attrs.NAME || attrs.LANGUAGE || "Subtitle",
-    uri: attrs.URI || "",
-    forced: attrs.FORCED === "YES",
-  };
-}
-
-function parseMediaPlaylist(text: string, baseUrl: string): string[] {
-  return text.split("\n")
-    .map(l => l.trim())
-    .filter(l => l && !l.startsWith("#"))
-    .map(l => l.startsWith("http") ? l : new URL(l, baseUrl).href);
-}
-
-async function getTmdbIdFromImdb(env: Env, imdbId: string): Promise<number | null> {
-  const apiKey = env.WATCH_TMDB_API_KEY;
-  if (!apiKey) return null;
-  const url = `${TMDB_BASE}/find/${imdbId}?api_key=${apiKey}&external_source=imdb_id`;
-  const res = await fetch(url, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(8000) });
-  if (!res.ok) return null;
-  const data = await res.json() as { movie_results?: any[] };
-  return data.movie_results?.[0]?.id || null;
-}
-
-async function completeHlsUpload(env: Env, id: string, size: number, segments: number): Promise<void> {
-  const row = await env.watch.prepare("SELECT upload_id, parts_json FROM upload WHERE movie_id = ?").bind(id).first<{ upload_id: string; parts_json: string }>();
-  if (!row) throw new Error("no_upload");
-  const parts = JSON.parse(row.parts_json) as { partNumber: number; etag: string }[];
-  await env.watch_bucket.resumeMultipartUpload(`video/${id}`, row.upload_id).complete(
-    parts.map(p => ({ partNumber: p.partNumber, etag: p.etag }))
-  );
-  await env.watch.prepare("DELETE FROM upload WHERE movie_id = ?").bind(id).run();
-}
-
-const TMDB_BASE = "https://api.themoviedb.org/3";
-const TMDB_IMAGE = "https://image.tmdb.org/t/p/w500";
