@@ -38,8 +38,8 @@ installed version from `:8060/query/apps` matches the manifest.
 Catalog + media require all three headers; posters stay public (Roku
 `Poster` nodes can't send headers; URLs are unguessable UUIDs).
 
-- `X-Key-ID` / `X-API-Key` = `WATCH_PUBLIC_KEY` / `WATCH_PRIVATE_KEY`
-  (account Secrets Store on the worker, `.env` + build injection here)
-- `X-Device-ID` = per-device UUID (`roDeviceInfo.GetRandomUUID()`, stored
-  in registry, written before the scene starts so it can build player
-  `httpHeaders` from the same section)
+- `WATCH_PUBLIC_KEY` / `WATCH_SIGNATURE` / `WATCH_TIMESTAMP` / `WATCH_NONCE`
+  (`roku/source/Auth.brs` signs `timestamp.nonce` with `roDSA` Ed25519).
+  The public and private key strings are injected by `build.sh` from `.env`.
+- Sign immediately before the request. The worker rejects a timestamp
+  more than 30 seconds off.

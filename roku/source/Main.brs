@@ -47,14 +47,6 @@ Sub Main()
   end while
 End Sub
 
-function PublicKey() as String
-  return "__WATCH_PUBLIC_KEY__"
-end function
-
-function PrivateKey() as String
-  return "__WATCH_PRIVATE_KEY__"
-end function
-
 function GetDeviceId() as String
   reg = CreateObject("roRegistrySection", "WatchCache")
   id = reg.Read("deviceId")
@@ -89,10 +81,11 @@ end sub
 function FetchCatalog() as Object
   u = CreateObject("roUrlTransfer")
   u.SetUrl("https://watch.cornerstonecoatings.com/v1/catalog")
-  u.AddHeader("X-Key-ID", PublicKey())
-  u.AddHeader("X-API-Key", PrivateKey())
-  u.AddHeader("X-Device-ID", GetDeviceId())
-  u.SetPort(443)
+  h = AuthHeaders()
+  u.AddHeader("WATCH_PUBLIC_KEY", h.WATCH_PUBLIC_KEY)
+  u.AddHeader("WATCH_SIGNATURE", h.WATCH_SIGNATURE)
+  u.AddHeader("WATCH_TIMESTAMP", h.WATCH_TIMESTAMP)
+  u.AddHeader("WATCH_NONCE", h.WATCH_NONCE)
   u.SetCertificatesFile("common:/certs/ca-bundle.crt")
   resp = u.GetToString()
   print "Fetch len: " + StrI(Len(resp))

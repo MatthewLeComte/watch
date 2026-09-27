@@ -32,7 +32,7 @@ STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 cp -r manifest source components images "$STAGE/"
 
-python3 - "$STAGE/source/Main.brs" "$WATCH_PUBLIC_KEY" "$WATCH_PRIVATE_KEY" <<'EOF'
+python3 - "$STAGE/source/Auth.brs" "$WATCH_PUBLIC_KEY" "$WATCH_PRIVATE_KEY" <<'EOF'
 import sys
 path, pub, priv = sys.argv[1], sys.argv[2], sys.argv[3]
 src = open(path).read()
