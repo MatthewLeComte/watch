@@ -5,6 +5,8 @@ import { parseReleaseName } from "../lib";
 
 export type SearchResult = {
   id: string;
+  /** TMDB movie id. This is the id the add search is for. */
+  tmdbId?: number | null;
   title: string;
   year: number | null;
   imdbId: string | null;

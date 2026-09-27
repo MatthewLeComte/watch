@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DetailView: View {
     @Environment(LibraryModel.self) private var library
+    @Environment(\.horizontalSizeClass) private var hSize
     var movieID: String
     @State private var playMovie: Movie?
     @State private var poster: URL?
@@ -26,16 +27,21 @@ struct DetailView: View {
     @ViewBuilder
     private func content(for movie: Movie) -> some View {
         GeometryReader { geo in
+            let artH = hSize == .compact
+                ? max(220, min(geo.size.height * 0.38, 360))
+                : min(geo.size.height * 0.42, 520)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     ZStack(alignment: .bottomLeading) {
                         PosterImage(url: poster ?? URL(string: movie.thumbnailUrl ?? ""), title: movie.displayTitle)
+                            .scaledToFill()
                             .frame(maxWidth: .infinity)
-                            .frame(height: max(200, min(geo.size.height * 0.2, 320)))
+                            .frame(height: artH)
                             .clipped()
                         LinearGradient(colors: [.clear, .black], startPoint: .center, endPoint: .bottom)
                         Text(movie.displayTitle)
-                            .font(.system(size: 40, weight: .heavy))
+                            .font(.largeTitle.weight(.heavy))
+                            .fontDesign(.serif)
                             .foregroundStyle(.white)
                             .padding(20)
                     }
@@ -112,10 +118,12 @@ struct DetailView: View {
                         }
                     }
                     .padding(20)
+                    .frame(maxWidth: Cinema.column, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .background(Color.black.ignoresSafeArea())
-            .navigationTitle(movie.displayTitle)
+            .navigationBarTitleDisplayMode(.inline)
             .modifier(FullScreenPlayer(movie: $playMovie))
         }
     }

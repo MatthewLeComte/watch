@@ -1,10 +1,11 @@
-import type { Env } from "./env";
 import { cinemetaMeta } from "./cinemeta";
+import type { Env } from "./env";
 import { ingest, saveCache } from "./ingest";
 import { muxSegment, planSegments, playlist, segmentSpan, shiftPlan } from "./hls";
 import { contentTypeFor, extOf, parseByteRange, parseReleaseName, srtToVtt } from "./lib";
 import { handleWatchMcp } from "./mcp";
-import { SOURCES, type SearchResult, type StreamInfo, type Quality, type SubtitleTrack } from "./sources";
+import { SOURCES, listSources, type SearchResult, type StreamInfo, type Quality, type SubtitleTrack } from "./sources";
+import { TmdbUnconfigured } from "./sources/meta";
 import "./sources/registry";
 
 /** R2 requires every part except the last to be at least 5 MiB. 8 MiB matches that rule. */
@@ -37,6 +38,7 @@ type MovieRow = {
   trailer_quality: string | null;
   trailer_status: string | null;
   trailer_note: string | null;
+  trailer_caption_key: string | null;
   status: string;
   match_source: string;
   match_p: number | null;
@@ -92,6 +94,12 @@ export default {
       if (!ok) return json({ error: "unauthorized" }, 401);
       return media(request, env, publicMedia[1]!);
     }
+    const publicCaptions = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/trailer\.vtt$/i);
+    if (publicCaptions && (request.method === "GET" || request.method === "HEAD")) {
+      const ok = (await rokuAuthorized(request, env)) || authorized(request, env.WATCH_KEY || "") || queryKey(request, env);
+      if (!ok) return json({ error: "unauthorized" }, 401);
+      return trailerCaptions(env, publicCaptions[1]!);
+    }
     const publicTrailer = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/trailer$/i);
     if (publicTrailer && (request.method === "GET" || request.method === "HEAD")) {
       const ok = (await rokuAuthorized(request, env)) || authorized(request, env.WATCH_KEY || "") || queryKey(request, env);
@@ -108,14 +116,25 @@ export default {
       return handleWatchMcp(request, env);
     }
 
-    // ===== FLAT SOURCE ENDPOINTS (no auth for search, simple paths) =====
-    // GET /api/sources - list sources
-    if ((path === "/api/sources" || path === "/api/sources/") && request.method === "GET") {
-      return json(SOURCES.listSources().map(s => ({ key: s.key, name: s.name })));
+    // Library routes use the app key. Source routes below stay on Ed25519.
+    if (path === "/v1/items" || path.startsWith("/v1/items/") || path === "/v1/trailers/backfill") {
+      if (!libraryAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
+      try {
+        return await libraryRoutes(request, env, path);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "failed";
+        return json({ error: message }, 500);
+      }
     }
 
-    // GET /api/sources/search?q=toy+story&source=rivestream - public search
-    const searchMatch = path.match(/^\/api\/sources\/search\/?$/i);
+    // ===== FLAT SOURCE ENDPOINTS (no auth for search, simple paths) =====
+    // GET /api/sources and /v1/sources - list sources
+    if ((path === "/api/sources" || path === "/api/sources/" || path === "/v1/sources" || path === "/v1/sources/") && request.method === "GET") {
+      return json(listSources().map(s => ({ key: s.key, name: s.name })));
+    }
+
+    // GET /v1/sources/search?q=elf — TMDB title search. The app calls this path.
+    const searchMatch = path.match(/^\/(?:api|v1)\/sources\/search\/?$/i);
     if (searchMatch && request.method === "GET") {
       const url = new URL(request.url);
       const q = url.searchParams.get("q") || "";
@@ -123,27 +142,40 @@ export default {
       const sourceKey = url.searchParams.get("source") || "meta";
       const source = SOURCES.get(sourceKey);
       if (!source) return json({ error: "source_not_found" }, 404);
-      if (imdb) {
-        const result = await source.searchByImdb(imdb);
-        return json(result ? [result] : []);
+      try {
+        if (imdb) {
+          const result = await source.searchByImdb(imdb, env);
+          return json(result ? [result] : []);
+        }
+        if (!q) return json({ error: "query_required" }, 400);
+        return json(await source.search(q, env));
+      } catch (err) {
+        if (err instanceof TmdbUnconfigured) return json({ error: "tmdb_unconfigured" }, 503);
+        const message = err instanceof Error ? err.message : "search_failed";
+        return json({ error: message }, 500);
       }
-      if (!q) return json({ error: "query_required" }, 400);
-      return json(await source.search(q));
+    }
+
+    const sourceResolve = path.match(/^\/(?:api|v1)\/sources\/([^/]+)\/resolve\/(.+?)\/?$/i);
+    if (sourceResolve && request.method === "GET") {
+      const source = SOURCES.get(sourceResolve[1]!);
+      if (!source) return json({ error: "source_not_found" }, 404);
+      const id = decodeURIComponent(sourceResolve[2]!);
+      try {
+        const stream = await source.resolve(env, id);
+        if (!stream) return json({ error: "not_found" }, 404);
+        return json(stream);
+      } catch (err) {
+        if (err instanceof TmdbUnconfigured) return json({ error: "tmdb_unconfigured" }, 503);
+        const message = err instanceof Error ? err.message : "resolve_failed";
+        return json({ error: message }, 500);
+      }
     }
 
     // All below require Ed25519 auth
     if (!(await sourceAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
 
     try {
-      // GET /api/sources/meta/resolve/:tmdbId - resolve to stream info
-      const resolveMatch = path.match(/^\/api\/sources\/meta\/resolve\/(\d+)\/?$/i);
-      if (resolveMatch && request.method === "GET") {
-        const tmdbId = Number(resolveMatch[1]!);
-        const source = SOURCES.get("meta");
-        if (!source) return json({ error: "source_not_found" }, 404);
-        return json(await source.resolve(env, `meta:${tmdbId}`) ?? { error: "not_found" }, 404);
-      }
-
       // POST /api/sources/meta/download - download + ingest
       const downloadMatch = path.match(/^\/api\/sources\/meta\/download\/?$/i);
       if (downloadMatch && request.method === "POST") {
@@ -158,31 +190,6 @@ export default {
         return json({ id }, 201);
       }
 
-      // ===== EXISTING ITEM ENDPOINTS =====
-      if (request.method === "GET" && path === "/v1/items") return listItems(env);
-      if (request.method === "POST" && path === "/v1/items") return createItem(request, env);
-      if (path === "/v1/items/all/rematch" && request.method === "POST") return rematchAll(env);
-      if (path === "/v1/trailers/backfill" && request.method === "POST") return backfillTrailers(request, env);
-      const item = path.match(/^\/v1\/items\/([0-9a-f-]{36})(?:\/(.*))?$/i);
-      if (!item) return json({ error: "not_found" }, 404);
-      const id = item[1]!;
-      const rest = item[2] ?? "";
-      if (!rest && request.method === "GET") return oneItem(env, id);
-      if (!rest && request.method === "PATCH") return patchItem(request, env, id);
-      if (!rest && request.method === "DELETE") return deleteItem(env, id);
-      if (rest === "complete" && request.method === "POST") return completeItem(env, id);
-      if (rest === "stream" && request.method === "POST") return publishItem(env, id);
-      if (rest === "purge" && request.method === "POST") return purgeOriginal(env, id);
-      if (rest === "playback" && request.method === "GET") return playbackItem(env, id);
-      if (rest === "rematch" && request.method === "POST") return rematch(env, id);
-      if (rest === "trailer/resolve" && request.method === "POST") return resolveTrailerRoute(env, id);
-      if (rest === "trailer" && request.method === "PUT") return trailerUpload(request, env, id);
-      if (rest === "poster" && request.method === "PUT") return putPoster(request, env, id);
-      const part = rest.match(/^parts\/(\d+)$/);
-      if (part && request.method === "PUT") return uploadPart(request, env, id, Number(part[1]));
-      const sub = rest.match(/^subtitles\/([a-z]{2,3})$/);
-      if (sub && request.method === "GET") return subtitle(env, id, sub[1]!);
-      if (sub && request.method === "PUT") return putSubtitle(request, env, id, sub[1]!);
       return json({ error: "not_found" }, 404);
     } catch (err) {
       const message = err instanceof Error ? err.message : "failed";
@@ -190,6 +197,38 @@ export default {
     }
   },
 } satisfies ExportedHandler<Env>;
+
+function libraryAuthorized(request: Request, env: Env): boolean {
+  return authorized(request, env.WATCH_KEY || "") || queryKey(request, env);
+}
+
+async function libraryRoutes(request: Request, env: Env, path: string): Promise<Response> {
+  if (request.method === "GET" && path === "/v1/items") return listItems(env);
+  if (request.method === "POST" && path === "/v1/items") return createItem(request, env);
+  if (path === "/v1/items/all/rematch" && request.method === "POST") return rematchAll(env);
+  if (path === "/v1/trailers/backfill" && request.method === "POST") return backfillTrailers(request, env);
+  const item = path.match(/^\/v1\/items\/([0-9a-f-]{36})(?:\/(.*))?$/i);
+  if (!item) return json({ error: "not_found" }, 404);
+  const id = item[1]!;
+  const rest = item[2] ?? "";
+  if (!rest && request.method === "GET") return oneItem(env, id);
+  if (!rest && request.method === "PATCH") return patchItem(request, env, id);
+  if (!rest && request.method === "DELETE") return deleteItem(env, id);
+  if (rest === "complete" && request.method === "POST") return completeItem(env, id);
+  if (rest === "stream" && request.method === "POST") return publishItem(env, id);
+  if (rest === "purge" && request.method === "POST") return purgeOriginal(env, id);
+  if (rest === "playback" && request.method === "GET") return playbackItem(env, id);
+  if (rest === "rematch" && request.method === "POST") return rematch(env, id);
+  if (rest === "trailer/resolve" && request.method === "POST") return resolveTrailerRoute(env, id);
+  if (rest === "trailer" && request.method === "PUT") return trailerUpload(request, env, id);
+  if (rest === "poster" && request.method === "PUT") return putPoster(request, env, id);
+  const part = rest.match(/^parts\/(\d+)$/);
+  if (part && request.method === "PUT") return uploadPart(request, env, id, Number(part[1]));
+  const sub = rest.match(/^subtitles\/([a-z]{2,3})$/);
+  if (sub && request.method === "GET") return subtitle(env, id, sub[1]!);
+  if (sub && request.method === "PUT") return putSubtitle(request, env, id, sub[1]!);
+  return json({ error: "not_found" }, 404);
+}
 
 async function streamAuthorized(request: Request, env: Env): Promise<boolean> {
   if (authorized(request, env.WATCH_KEY || "") || queryKey(request, env)) return true;
@@ -881,13 +920,21 @@ const TRAILER_MIN_BYTES = 1024;
 
 type TmdbVideo = { site?: string; type?: string; official?: boolean; key?: string; iso_639_1?: string };
 
+async function tmdbSecret(value: string | { get?: () => Promise<string> } | undefined): Promise<string> {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  try { return (await value.get?.()) || ""; } catch { return ""; }
+}
+
 async function tmdbGet(env: Env, pathAndQuery: string): Promise<Response | null> {
   const headers: Record<string, string> = { "User-Agent": "Watch/1", Accept: "application/json" };
   let url = `${TMDB}${pathAndQuery}`;
-  if (env.WATCH_TMDB_API_READ_ACCESS_TOKEN) {
-    headers.Authorization = `Bearer ${env.WATCH_TMDB_API_READ_ACCESS_TOKEN}`;
-  } else if (env.WATCH_TMDB_API_KEY) {
-    url += `${url.includes("?") ? "&" : "?"}api_key=${encodeURIComponent(env.WATCH_TMDB_API_KEY)}`;
+  const bearer = await tmdbSecret(env.WATCH_TMDB_API_READ_ACCESS_TOKEN);
+  const apiKey = await tmdbSecret(env.WATCH_TMDB_API_KEY);
+  if (bearer) {
+    headers.Authorization = `Bearer ${bearer}`;
+  } else if (apiKey) {
+    url += `${url.includes("?") ? "&" : "?"}api_key=${encodeURIComponent(apiKey)}`;
   } else {
     return null;
   }
@@ -944,7 +991,8 @@ async function resolveTrailerFile(env: Env, id: string): Promise<ResolveResult> 
   if (movie.trailer_status === "ready" && movie.trailer_r2_key && (await env.watch_bucket.head(movie.trailer_r2_key))) {
     return { http: 200, body: { ok: true, deduped: true, trailerStatus: "ready" } };
   }
-  const ytId = movie.trailer_key || (movie.imdb_id ? await tmdbTrailerKey(movie.imdb_id, env) : null);
+  let ytId = movie.trailer_key || (movie.imdb_id ? await tmdbTrailerKey(movie.imdb_id, env) : null);
+  if (!ytId && movie.imdb_id) ytId = (await cinemetaMeta(movie.imdb_id))?.trailerKey ?? null;
   if (!ytId) {
     await markTrailer(env, id, { status: "failed", note: "no_trailer_found" });
     return { http: 404, body: { ok: false, error: "no_trailer_found" } };
@@ -961,6 +1009,13 @@ async function resolveTrailerFile(env: Env, id: string): Promise<ResolveResult> 
       .bind(key)
       .first<{ trailer_bytes: number | null }>();
     await markTrailer(env, id, { r2: key, bytes: existing?.trailer_bytes ?? null, status: "ready", note: "deduped" });
+    const cap = await env.watch
+      .prepare("SELECT trailer_caption_key FROM movie WHERE trailer_key = ? AND trailer_caption_key IS NOT NULL LIMIT 1")
+      .bind(ytId)
+      .first<{ trailer_caption_key: string | null }>();
+    if (cap?.trailer_caption_key) {
+      await env.watch.prepare("UPDATE movie SET trailer_caption_key = ? WHERE id = ?").bind(cap.trailer_caption_key, id).run();
+    }
     return { http: 200, body: { ok: true, deduped: true, ytId, watchUrl, trailerStatus: "ready" } };
   }
   await markTrailer(env, id, { status: "youtube", note: "tmdb" });
@@ -1017,6 +1072,7 @@ async function ensureTrailerSchema(env: Env): Promise<void> {
     "ALTER TABLE movie ADD COLUMN trailer_quality TEXT",
     "ALTER TABLE movie ADD COLUMN trailer_status TEXT DEFAULT 'missing'",
     "ALTER TABLE movie ADD COLUMN trailer_note TEXT",
+    "ALTER TABLE movie ADD COLUMN trailer_caption_key TEXT",
   ];
   for (const sql of alters) {
     try {
@@ -1037,7 +1093,7 @@ async function backfillTrailers(request: Request, env: Env): Promise<Response> {
     .all<{ id: string; title: string; imdb_id: string | null }>();
   const results: Array<Record<string, unknown>> = [];
   for (const r of rows.results ?? []) {
-    const ytId = await tmdbTrailerKey(r.imdb_id!, env);
+    const ytId = (await tmdbTrailerKey(r.imdb_id!, env)) ?? (await cinemetaMeta(r.imdb_id!))?.trailerKey ?? null;
     if (ytId) {
       const watchUrl = `https://www.youtube.com/watch?v=${ytId}`;
       await env.watch.prepare(
@@ -1052,6 +1108,21 @@ async function backfillTrailers(request: Request, env: Env): Promise<Response> {
     }
   }
   return json({ ok: true, processed: results.length, results });
+}
+
+async function trailerCaptions(env: Env, id: string): Promise<Response> {
+  await ensureTrailerSchema(env);
+  const row = await env.watch
+    .prepare("SELECT trailer_caption_key FROM movie WHERE id = ?")
+    .bind(id)
+    .first<{ trailer_caption_key: string | null }>();
+  if (!row?.trailer_caption_key) return json({ error: "no_captions" }, 404);
+  const obj = await env.watch_bucket.get(row.trailer_caption_key);
+  if (!obj) return json({ error: "missing_object" }, 404);
+  const headers = new Headers();
+  headers.set("content-type", "text/vtt; charset=utf-8");
+  headers.set("cache-control", "public, max-age=86400");
+  return new Response(obj.body, { headers });
 }
 
 async function trailerFile(request: Request, env: Env, id: string): Promise<Response> {
@@ -1234,6 +1305,7 @@ function toItem(row: MovieRow, subs: SubRow[]) {
     trailerUrl: row.trailer_url,
     trailer: row.trailer_url,
     trailerFile: row.trailer_r2_key ? `https://watch.cornerstonecoatings.com/v1/items/${row.id}/trailer` : null,
+    trailerCaptions: row.trailer_caption_key ? `https://watch.cornerstonecoatings.com/v1/items/${row.id}/trailer.vtt` : null,
     trailerStatus: row.trailer_status ?? "missing",
     status: row.status,
     matchSource: row.match_source,

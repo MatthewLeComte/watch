@@ -28,6 +28,16 @@
       "binding": "WATCH_PRIVATE_KEY",
       "secret_name": "WATCH_PRIVATE_KEY",
       "store_id": "0837aceaf29e426aa377a4728cc6db7a"
+    },
+    {
+      "binding": "WATCH_TMDB_API_KEY",
+      "secret_name": "WATCH_TMDB_API_KEY",
+      "store_id": "0837aceaf29e426aa377a4728cc6db7a"
+    },
+    {
+      "binding": "WATCH_TMDB_API_READ_ACCESS_TOKEN",
+      "secret_name": "WATCH_TMDB_API_READ_ACCESS_TOKEN",
+      "store_id": "0837aceaf29e426aa377a4728cc6db7a"
     }
   ],
   "d1_databases": [

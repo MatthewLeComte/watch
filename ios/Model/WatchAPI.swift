@@ -137,6 +137,16 @@ struct WatchAPI: Sendable {
         return try await send(path: "v1/items/\(id)/media", method: "GET", range: "bytes=\(offset)-\(end)")
     }
 
+    func resolveTrailer(id: String) async throws -> String? {
+        let data = try await send(
+            path: "v1/items/\(id)/trailer/resolve",
+            method: "POST",
+            body: Data("{}".utf8),
+            contentType: "application/json"
+        )
+        return try JSONDecoder().decode(TrailerResolve.self, from: data).ytId
+    }
+
     func poster(id: String) async throws -> Data {
         try await send(path: "v1/items/\(id)/poster", method: "GET")
     }
@@ -241,6 +251,7 @@ struct SourceInfo: Codable, Hashable, Sendable, Identifiable {
 
 struct SourceSearchResult: Codable, Hashable, Sendable, Identifiable {
     var id: String
+    var tmdbId: Int?
     var title: String
     var year: Int?
     var imdbId: String?
@@ -309,5 +320,6 @@ extension SourceSubtitle {
     }
 }
 
+private struct TrailerResolve: Codable { var ytId: String? }
 private struct CreateBody: Codable { var id: String; var partSize: Int }
 private struct ErrorBody: Codable { var error: String }

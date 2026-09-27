@@ -112,7 +112,7 @@ export const sourceRiveStream: Source = {
 
     const imdbId = detail.external_ids?.imdb_id || null;
 
-    const pageUrl = buildRiveStreamUrl(tmdbId, mediaType);
+    const pageUrl = buildRiveStreamUrl(tmdbId, mediaType, mediaType === "tv" ? 1 : undefined, mediaType === "tv" ? 1 : undefined);
 
     const browserResult = await extractHlsFromRiveStream(env, pageUrl);
     if (!browserResult) return null;

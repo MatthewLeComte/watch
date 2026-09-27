@@ -8,6 +8,8 @@ enum Cinema {
     static let mute = Color(white: 0.72)
     static let red = Color(red: 0.898, green: 0.035, blue: 0.078)
     static let chip = Color(white: 0.42)
+    static let column: CGFloat = 680
+    static let playColumn: CGFloat = 420
 }
 
 struct PosterImage: View {
@@ -50,7 +52,7 @@ private func posterFallback(_ title: String) -> some View {
     ZStack {
         LinearGradient(colors: [Color(white: 0.16), .black], startPoint: .top, endPoint: .bottom)
         Text(title)
-            .font(.system(size: 28, weight: .heavy))
+            .font(.title.weight(.heavy))
             .foregroundStyle(.white)
             .multilineTextAlignment(.center)
             .padding(16)

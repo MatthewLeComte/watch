@@ -7,70 +7,125 @@ import { Source, type SearchResult, type StreamInfo, type Quality, type Subtitle
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const TMDB_IMAGE = "https://image.tmdb.org/t/p/w500";
 
+export class TmdbUnconfigured extends Error {
+  constructor() { super("tmdb_unconfigured"); }
+}
+
+async function secretText(value: string | { get?: () => Promise<string> } | undefined): Promise<string> {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  try { return (await value.get?.()) || ""; } catch { return ""; }
+}
+
+async function tmdbFetch(env: Env, pathAndQuery: string): Promise<Response> {
+  const headers: Record<string, string> = { Accept: "application/json", "User-Agent": "Watch/1" };
+  let url = `${TMDB_BASE}${pathAndQuery}`;
+  const bearer = await secretText(env.WATCH_TMDB_API_READ_ACCESS_TOKEN);
+  const apiKey = await secretText(env.WATCH_TMDB_API_KEY);
+  if (bearer) {
+    headers.Authorization = `Bearer ${bearer}`;
+  } else if (apiKey) {
+    url += `${url.includes("?") ? "&" : "?"}api_key=${encodeURIComponent(apiKey)}`;
+  } else {
+    throw new TmdbUnconfigured();
+  }
+  return fetch(url, { headers, signal: AbortSignal.timeout(10000) });
+}
+
+type TmdbHit = {
+  id: number;
+  media_type?: "movie" | "tv" | "person";
+  title?: string;
+  name?: string;
+  release_date?: string;
+  first_air_date?: string;
+  poster_path?: string | null;
+};
+
+/** `meta:10719` is a movie. `meta:tv:60625:1:1` is a series episode. A bare series id plays season 1 episode 1. */
+function parseMetaId(id: string): { mediaType: "movie" | "tv"; tmdbId: number; season: number; episode: number } | null {
+  const rest = id.replace(/^meta:/, "");
+  if (rest.startsWith("tv:")) {
+    const parts = rest.split(":");
+    const tmdbId = Number(parts[1]);
+    if (!tmdbId) return null;
+    return { mediaType: "tv", tmdbId, season: Number(parts[2]) || 1, episode: Number(parts[3]) || 1 };
+  }
+  const tmdbId = Number(rest);
+  if (!tmdbId) return null;
+  return { mediaType: "movie", tmdbId, season: 1, episode: 1 };
+}
+
+async function toResult(env: Env, hit: TmdbHit): Promise<SearchResult> {
+  const mediaType = hit.media_type === "tv" ? "tv" : "movie";
+  let imdbId: string | null = null;
+  try {
+    const ext = await tmdbFetch(env, `/${mediaType}/${hit.id}/external_ids`);
+    if (ext.ok) {
+      const body = await ext.json() as { imdb_id?: string | null };
+      imdbId = body.imdb_id ?? null;
+    }
+  } catch { /* the TMDB id is still the result */ }
+  const aired = hit.release_date || hit.first_air_date;
+  return {
+    id: mediaType === "tv" ? `meta:tv:${hit.id}:1:1` : `meta:${hit.id}`,
+    tmdbId: hit.id,
+    title: hit.title || hit.name || "",
+    year: aired ? Number(aired.slice(0, 4)) : null,
+    imdbId,
+    poster: hit.poster_path ? `${TMDB_IMAGE}${hit.poster_path}` : null,
+    type: mediaType === "tv" ? "series" : "movie",
+  };
+}
+
 export const sourceMeta: Source = {
   key: "meta",
-  name: "Meta (RiveStream)",
+  name: "TMDB",
 
   async search(query: string, env: Env): Promise<SearchResult[]> {
-    const apiKey = env.WATCH_TMDB_API_KEY;
-    if (!apiKey) return [];
-    const url = `${TMDB_BASE}/search/movie?api_key=${apiKey}&query=${encodeURIComponent(query)}&language=en-US&include_adult=false`;
-    const res = await fetch(url, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+    const res = await tmdbFetch(env, `/search/multi?query=${encodeURIComponent(query)}&language=en-US&include_adult=false`);
     if (!res.ok) return [];
-    const data = await res.json() as { results: any[] };
-    return data.results.slice(0, 20).map(r => ({
-      id: `meta:${r.id}`, // TMDB ID as universal key
-      title: r.title || "",
-      year: r.release_date ? Number(r.release_date.slice(0, 4)) : null,
-      imdbId: null,
-      poster: r.poster_path ? `${TMDB_IMAGE}${r.poster_path}` : null,
-      type: "movie" as const,
-    }));
+    const data = await res.json() as { results?: TmdbHit[] };
+    const hits = (data.results ?? []).filter((r) => r.media_type === "movie" || r.media_type === "tv").slice(0, 10);
+    return Promise.all(hits.map((r) => toResult(env, r)));
   },
 
   async searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null> {
-    const tmdbId = await getTmdbIdFromImdb(env, imdbId);
-    if (!tmdbId) return null;
-    const apiKey = env.WATCH_TMDB_API_KEY;
-    if (!apiKey) return null;
-    const detailUrl = `${TMDB_BASE}/movie/${tmdbId}?api_key=${apiKey}&language=en-US`;
-    const res = await fetch(detailUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(8000) });
+    const res = await tmdbFetch(env, `/find/${encodeURIComponent(imdbId)}?external_source=imdb_id`);
     if (!res.ok) return null;
-    const detail = await res.json() as any;
-    const result: SearchResult = {
-      id: `meta:${tmdbId}`,
-      title: detail.title || "",
-      year: detail.release_date ? Number(detail.release_date.slice(0, 4)) : null,
-      imdbId: imdbId,
-      poster: detail.poster_path ? `${TMDB_IMAGE}${detail.poster_path}` : null,
-      type: "movie"
-    };
+    const body = await res.json() as { movie_results?: TmdbHit[]; tv_results?: TmdbHit[] };
+    const movie = body.movie_results?.[0];
+    const tv = body.tv_results?.[0];
+    const hit = movie || tv;
+    if (!hit?.id) return null;
+    hit.media_type = movie ? "movie" : "tv";
+    const result = await toResult(env, hit);
+    result.imdbId = imdbId;
     return result;
   },
 
   async resolve(env: Env, id: string): Promise<StreamInfo | null> {
-    const tmdbIdStr = id.replace("meta:", "");
-    const tmdbId = Number(tmdbIdStr);
-    if (!tmdbId) return null;
-
-    const apiKey = env.WATCH_TMDB_API_KEY;
-    if (!apiKey) return null;
-    const detailUrl = `${TMDB_BASE}/movie/${tmdbId}?api_key=${apiKey}&language=en-US&append_to_response=external_ids`;
-    const res = await fetch(detailUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+    const parsed = parseMetaId(id);
+    if (!parsed) return null;
+    const { mediaType, tmdbId, season, episode } = parsed;
+    const res = await tmdbFetch(env, `/${mediaType}/${tmdbId}?language=en-US&append_to_response=external_ids`);
     if (!res.ok) return null;
-    const detail = await res.json() as any;
+    const detail = await res.json() as { title?: string; name?: string; release_date?: string; first_air_date?: string; poster_path?: string | null; external_ids?: { imdb_id?: string } };
 
-    // Single provider: RiveStream (TMDB ID → headless → HLS)
     const { extractHlsFromRiveStream } = await import("./rivestream");
-    const pageUrl = `https://www.rivestream.app/watch?type=movie&id=${tmdbId}`;
-    const browserResult = await extractHlsFromRiveStream(env, `https://www.rivestream.app/watch?type=movie&id=${tmdbId}`);
+    const pageUrl = mediaType === "tv"
+      ? `https://www.rivestream.app/watch?type=tv&id=${tmdbId}&season=${season}&episode=${episode}`
+      : `https://www.rivestream.app/watch?type=movie&id=${tmdbId}`;
+    const browserResult = await extractHlsFromRiveStream(env, pageUrl);
     if (!browserResult) return null;
 
+    const aired = detail.release_date || detail.first_air_date;
+    const title = mediaType === "tv" ? `${detail.name || "Episode"} S${season}E${episode}` : (detail.title || "");
     return {
-      id: `meta:${tmdbId}`,
-      title: detail.title,
-      year: detail.release_date ? Number(detail.release_date.slice(0, 4)) : null,
-      imdbId: detail.external_ids?.imdb_id,
+      id: mediaType === "tv" ? `meta:tv:${tmdbId}:${season}:${episode}` : `meta:${tmdbId}`,
+      title,
+      year: aired ? Number(aired.slice(0, 4)) : null,
+      imdbId: detail.external_ids?.imdb_id ?? null,
       poster: detail.poster_path ? `${TMDB_IMAGE}${detail.poster_path}` : null,
       hlsUrl: browserResult.hlsUrl,
       qualities: browserResult.qualities,

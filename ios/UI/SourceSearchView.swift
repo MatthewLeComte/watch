@@ -16,7 +16,7 @@ struct SourceSearchView: View {
     @State private var pendingSubtitle: SourceSubtitle?
     @State private var downloading = false
     @State private var downloadStage = ""
-    @State private var selectedSource = "67movies"
+    @State private var selectedSource = "meta"
     @State private var availableSources: [SourceInfo] = []
 
     var body: some View {
@@ -101,7 +101,7 @@ struct SourceSearchView: View {
                             Text("Search \(selectedSource)")
                                 .font(.title.weight(.bold))
                                 .foregroundStyle(.white)
-                            Text("Type a movie title or IMDb ID (ttXXXXXXX)")
+                            Text("Type a movie title. The result is its TMDB id.")
                                 .foregroundStyle(.white.opacity(0.6))
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 40)
@@ -176,8 +176,8 @@ struct SourceSearchView: View {
                         selectedSource = first.key
                     }
                 } catch {
-                    availableSources = [SourceInfo(key: "67movies", name: "67movies")]
-                    selectedSource = "67movies"
+                    availableSources = [SourceInfo(key: "meta", name: "TMDB")]
+                    selectedSource = "meta"
                 }
             }
         }
@@ -187,7 +187,7 @@ struct SourceSearchView: View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.white.opacity(0.5))
-            TextField("Movie title or IMDb ID (ttXXXXXXX)", text: $query)
+            TextField("Movie title", text: $query)
                 .foregroundStyle(.white)
                 .textInputAutocapitalization(.never)
                 .disableAutocorrection(true)
@@ -232,8 +232,13 @@ struct SourceSearchView: View {
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(.white)
                     .lineLimit(2)
+                if let tmdb = result.tmdbId {
+                    Text(result.type == "series" ? "TV \(tmdb) S1E1" : "TMDB \(tmdb)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
                 if let imdb = result.imdbId {
-                    Text("IMDb: \(imdb)")
+                    Text(imdb)
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.5))
                 }
@@ -260,7 +265,8 @@ struct SourceSearchView: View {
                 results = try await library.sourceSearch(query: query, source: selectedSource)
             }
         } catch {
-            self.error = error.localizedDescription
+            let message = error.localizedDescription
+            self.error = message.contains("tmdb_unconfigured") ? "TMDB is not configured on the worker." : message
             results = []
         }
         searching = false
