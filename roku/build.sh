@@ -12,6 +12,7 @@ if [ -f ".env" ]; then
   _OVERRIDE_HOST="${ROKU_HOST:-}"
   _OVERRIDE_USER="${ROKU_DEV_USER:-}"
   _OVERRIDE_PASS="${ROKU_DEV_PASSWORD:-}"
+  _OVERRIDE_KEY="${WATCH_KEY:-}"
   set -a
   # shellcheck disable=SC1091
   . ./.env
@@ -19,6 +20,7 @@ if [ -f ".env" ]; then
   if [ -n "$_OVERRIDE_HOST" ]; then ROKU_HOST="$_OVERRIDE_HOST"; fi
   if [ -n "$_OVERRIDE_USER" ]; then ROKU_DEV_USER="$_OVERRIDE_USER"; fi
   if [ -n "$_OVERRIDE_PASS" ]; then ROKU_DEV_PASSWORD="$_OVERRIDE_PASS"; fi
+  if [ -n "$_OVERRIDE_KEY" ]; then WATCH_KEY="$_OVERRIDE_KEY"; fi
 fi
 
 if [ -z "${WATCH_KEY:-}" ]; then
