@@ -1,11 +1,72 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 import AVFoundation
 import WebKit
 
+private struct ImportMenuButton: UIViewRepresentable {
+    var onImport: () -> Void
+
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .system)
+        button.setImage(UIImage(systemName: "plus"), for: .normal)
+        button.tintColor = .label
+        button.showsMenuAsPrimaryAction = true
+        button.menu = UIMenu(children: [
+            UIAction(title: "Import File", image: UIImage(systemName: "square.and.arrow.down")) { _ in
+                context.coordinator.fire()
+            }
+        ])
+        return button
+    }
+
+    func updateUIView(_ button: UIButton, context: Context) {
+        context.coordinator.fire = onImport
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(fire: onImport) }
+
+    final class Coordinator {
+        var fire: () -> Void
+        init(fire: @escaping () -> Void) { self.fire = fire }
+    }
+}
+
+private final class VolumeUpUnmute: @unchecked Sendable {
+    var onUp: @Sendable () -> Void = {}
+    private let lock = NSLock()
+    private var watch: NSKeyValueObservation?
+    private var last: Float = -1
+
+    func start() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setActive(true)
+        lock.lock()
+        last = session.outputVolume
+        lock.unlock()
+        watch = session.observe(\.outputVolume, options: [.new]) { [weak self] session, _ in
+            guard let self else { return }
+            self.lock.lock()
+            let now = session.outputVolume
+            let rose = now > self.last + 0.001
+            self.last = now
+            let fire = self.onUp
+            self.lock.unlock()
+            if rose { fire() }
+        }
+    }
+}
+
 struct LibraryView: View {
     @Environment(LibraryModel.self) private var library
+    @Environment(\.horizontalSizeClass) private var hSize
+    @Environment(\.verticalSizeClass) private var vSize
     @State private var importing = false
+    @State private var searchQuery = ""
+    @State private var searchPresented = false
+    @State private var searchResults: [SourceSearchResult] = []
+    @State private var searchError: String?
+    @State private var picked: SourceSearchResult?
     @State private var correcting: Movie?
     @State private var pendingImport: URL?
     @State private var pendingScoped = false
@@ -13,42 +74,75 @@ struct LibraryView: View {
     @State private var shelfID: String?
     @State private var posters: [String: URL] = [:]
     @State private var playing: Movie?
-    @State private var heroMuted = true
-    @State private var playerError: String?
-    /// Resolved YouTube ids (Kinocheck) for movies with no trailer on the
-    /// record. "" means looked-up-and-none — never resolve twice.
-    @State private var trailerKeys: [String: String] = [:]
+    @State private var youtubeIDs: [String: String] = [:]
+    @AppStorage("watch.trailerAudible") private var trailerAudible = false
+    @State private var volumeUp = VolumeUpUnmute()
+    @State private var featuredID: String?
 
-    private let cardW: CGFloat = 150
-    private let cardH: CGFloat = 225
+    private var isCompact: Bool { hSize == .compact }
+
+    private func cardWidth(in width: CGFloat) -> CGFloat {
+        let columns: CGFloat = isCompact ? 2.4 : (width > 1000 ? 6.2 : 4.6)
+        return min(260, max(140, (width - 64) / columns))
+    }
+
+    private var heroFileURL: URL? { heroMovie?.trailerFilePlayURL }
+
+    private var heroYouTubeID: String? {
+        guard heroFileURL == nil, let movie = heroMovie else { return nil }
+        return movie.youTubeID ?? youtubeIDs[movie.id]
+    }
 
     var body: some View {
         NavigationStack {
-            ZStack(alignment: .top) {
-                Color.black.ignoresSafeArea()
-                if library.movies.isEmpty { empty } else { home }
-                controls
+            ZStack {
+                if library.movies.isEmpty {
+                    empty
+                } else {
+                    home
+                }
+                if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    searchResultsList
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.black)
+                }
             }
-            .toolbar { }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black.ignoresSafeArea())
+            .searchable(text: $searchQuery, isPresented: $searchPresented, prompt: "Movie or show")
+            .task(id: searchQuery) { await runSearch() }
+            .sheet(item: $picked) { result in
+                RiveCaptureView(library: library, result: result) { picked = nil }
+            }
+            .toolbar {
+                DefaultToolbarItem(kind: .search, placement: .bottomBar)
+                if !searchPresented {
+                    ToolbarSpacer(.flexible, placement: .bottomBar)
+                    ToolbarItem(placement: .bottomBar) {
+                        ImportMenuButton { importing = true }
+                    }
+                }
+            }
             .navigationDestination(for: Movie.self) { DetailView(movieID: $0.id) }
             .sheet(item: $correcting) { CorrectMatchView(movie: $0) }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.mpeg4Movie, .quickTimeMovie, .movie], allowsMultipleSelection: true) { handleImport($0) }
             .overlay { if let url = pendingImport { ImportView(url: url, scoped: pendingScoped) { pendingImport = nil } } }
             .sheet(isPresented: $bulkSheetPresented) { BulkImportView(onClose: { if library.bulkAllFinished { library.clearFinishedBulk() }; bulkSheetPresented = false }) }
             .onChange(of: library.bulkItems.count) { _, c in if c > 0 { bulkSheetPresented = true } }
-            .modifier(FullScreenPlayer(movie: $playing, onError: { playing = nil; playerError = $0 }))
-            .alert("Couldn't play", isPresented: Binding(get: { playerError != nil }, set: { if !$0 { playerError = nil } })) {
-                Button("OK") { playerError = nil }
-            } message: {
-                Text(playerError ?? "")
-            }
-            .refreshable { await library.refresh(); await loadPosters() }
+            .modifier(FullScreenPlayer(movie: $playing))
+            .sensoryFeedback(.impact(weight: .medium), trigger: playing?.id)
+
             .onChange(of: library.openImport) { if let url = library.openImport { pendingImport = url; pendingScoped = library.openImportScoped; library.openImport = nil } }
             .onChange(of: shelves.map(\.id)) { _, ids in if let id = shelfID, !ids.contains(id) { shelfID = nil } }
-            .onChange(of: library.movies.map(\.id)) { _, _ in Task { await loadPosters() } }
             .task { await loadPosters() }
-            .task(id: heroMovie?.id) { await resolveTrailerKey() }
+            .task(id: library.movies.map(\.id).joined(separator: ",")) { await library.cachePlaylists() }
+            .task(id: heroMovie?.id) { await resolveStreamTrailer() }
+            .onAppear {
+                volumeUp.onUp = { Task { @MainActor in trailerAudible = true } }
+                volumeUp.start()
+            }
         }
+        .navigationSplitViewStyle(.balanced)
     }
 
     private var shelves: [Shelf] {
@@ -65,252 +159,261 @@ struct LibraryView: View {
         return r.filter { !$0.movies.isEmpty }
     }
 
-    /// Hero follows the visible row — trailer never gets lost by scrolling.
     private var heroMovie: Movie? {
-        let idx = shelves.firstIndex { $0.id == shelfID } ?? 0
-        return shelves[safe: idx]?.movies.first ?? library.movies.first
+        if let featuredID, let movie = library.movies.first(where: { $0.id == featuredID }) { return movie }
+        return library.movies.first
     }
 
     private var home: some View {
-        GeometryReader { geo in
-            let w = geo.size.width, h = geo.size.height
-            if h > w {
-                portraitHome(width: w, videoH: w * 9 / 16)
-            } else if h < 700 {
-                // Short landscape (phones sideways): one free scroll, true
-                // 16:9 hero, compact rails. Nothing squeezed, nothing cropped.
-                shortLandscapeHome(width: w)
-            } else {
-                tallLandscapeHome(width: w, height: h)
-            }
-        }
-    }
-
-    /// Portrait (iPhone held upright): billboard up top, plain vertical
-    /// scroll of compact rails. No full-page pager — one shelf per screen
-    /// with nowhere to scroll is what made portrait garbage.
-    private func portraitHome(width: CGFloat, videoH: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            billboard(width: width, videoH: videoH)
-                .frame(width: width, height: videoH)
-            ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    ForEach(shelves) { shelf in
-                        compactRail(shelf, width: width)
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 18) {
+                trailerStage
+                if let movie = heroMovie {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(movie.displayTitle)
+                            .font(.largeTitle.weight(.heavy))
+                            .fontDesign(.serif)
+                            .foregroundStyle(.white)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text([movie.yearText, movie.runtimeText ?? "", movie.genres.prefix(3).joined(separator: " · ")].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(1)
                     }
+                    .padding(.horizontal, 20)
+                    HStack(spacing: 12) {
+                        Button { play(movie) } label: {
+                            Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.glassProminent)
+                        .controlSize(.large)
+                        Button { library.download(movie) } label: {
+                            let saved = (library.fractions[movie.id] ?? 0) >= 0.999
+                            Label(downloadTitle(movie), systemImage: saved ? "checkmark" : "arrow.down").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.glass)
+                        .controlSize(.large)
+                        .disabled((library.fractions[movie.id] ?? 0) >= 0.999)
+                        .overlay { SaveRing(progress: library.downloading[movie.id]) }
+                    }
+                    .padding(.horizontal, 20)
+                    ScrollView {
+                        Text(movie.overview.isEmpty ? " " : movie.overview)
+                            .font(.system(size: 16))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.bottom, 18)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .scrollIndicators(.visible, axes: .vertical)
+                    .padding(.horizontal, 20)
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0),
+                                .init(color: .black, location: 0.45),
+                                .init(color: .clear, location: 0.92)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
                 }
-                .padding(.vertical, 14)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            posterCarousel
+                .frame(height: 162)
+        }
+        .padding(.top, -40)
+        .padding(.bottom, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var trailerStage: some View {
+        ZStack {
+            Color.black
+            if playing == nil, let url = heroFileURL {
+                HeroTrailer(
+                    url: url,
+                    captionsURL: heroMovie?.trailerCaptions.flatMap(URL.init(string:)),
+                    apiKey: library.api.key,
+                    audible: trailerAudible,
+                    suspended: picked != nil
+                )
+                .id(url.absoluteString)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture { trailerAudible.toggle() }
+            } else if let movie = heroMovie {
+                PosterImage(url: billboardURL(movie), title: movie.displayTitle)
+                    .scaledToFit()
+            }
+        }
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .frame(maxWidth: .infinity)
+        .fixedSize(horizontal: false, vertical: true)
+        .clipped()
+        .overlay(alignment: .topTrailing) {
+            if heroFileURL != nil, playing == nil {
+                Image(systemName: trailerAudible ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    .font(.body.weight(.semibold))
+                    .padding(10)
+                    .glassEffect(.regular, in: Circle())
+                    .padding(12)
+                    .allowsHitTesting(false)
             }
         }
     }
 
-    private func compactRail(_ s: Shelf, width: CGFloat) -> some View {
-        let cw = min(150, max(104, width * 0.28))
-        let ch = cw * 1.5
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(s.title)
-                .font(.headline.weight(.bold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 10) {
-                    ForEach(s.movies) { m in
-                        VStack(alignment: .leading, spacing: 5) {
-                            PosterImage(url: posters[m.id] ?? URL(string: m.thumbnailUrl ?? ""), title: m.displayTitle)
-                                .frame(width: cw, height: ch)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                            if s.id == "continue", let frac = continueFraction(m) {
-                                ProgressView(value: frac)
-                                    .tint(.red)
-                                    .frame(width: cw)
+    private var posterCarousel: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(spacing: 12) {
+                ForEach(library.movies) { movie in
+                    Button { featuredID = movie.id } label: {
+                        PosterImage(url: posters[movie.id] ?? URL(string: movie.posterUrl ?? movie.thumbnailUrl ?? ""), title: movie.displayTitle)
+                            .frame(width: 108, height: 162)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay {
+                                if movie.id == heroMovie?.id {
+                                    RoundedRectangle(cornerRadius: 10).stroke(.white, lineWidth: 2)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        if (library.fractions[movie.id] ?? 0) > 0 || library.downloading[movie.id] != nil {
+                            Button("Clear Download", systemImage: "trash", role: .destructive) {
+                                Task { await library.clearDownload(movie) }
                             }
                         }
-                        .onTapGesture { play(m) }
-                        .contextMenu { posterMenu(m) }
                     }
                 }
-                .padding(.horizontal, 16)
+            }
+            .padding(.horizontal, 20)
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .vertical)
+    }
+
+    private func downloadTitle(_ movie: Movie) -> String {
+        if (library.fractions[movie.id] ?? 0) >= 0.999 { return "Downloaded" }
+        if library.downloading[movie.id] != nil { return "Saving" }
+        return "Download"
+    }
+
+    @ViewBuilder private func shelfScroll(width: CGFloat) -> some View {
+        if isCompact {
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 0) {
+                    ForEach(shelves) { shelf in
+                        shelfRow(shelf, width: width)
+                            .containerRelativeFrame(.vertical)
+                            .id(shelf.id)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $shelfID)
+            .scrollIndicators(.hidden)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 28) {
+                    ForEach(shelves) { shelf in
+                        shelfRow(shelf, width: width).id(shelf.id)
+                    }
+                }
+                .padding(.bottom, 32)
             }
         }
     }
 
-    /// Short landscape: everything scrolls, hero keeps true 16:9.
-    private func shortLandscapeHome(width w: CGFloat) -> some View {
-        ScrollView(.vertical) {
-            LazyVStack(alignment: .leading, spacing: 18) {
-                billboard(width: w, videoH: w * 9 / 16)
-                    .frame(width: w, height: w * 9 / 16)
-                ForEach(shelves) { shelf in
-                    compactRail(shelf, width: w)
-                }
-            }
-            .padding(.bottom, 14)
-        }
-    }
-
-    private func tallLandscapeHome(width w: CGFloat, height h: CGFloat) -> some View {
-            // True 16:9 when it fits; capped so shelves keep ≥34% of height.
-            // Capping crops backdrops, so the cap only bites on wide windows.
-            let heroH = min(w * 9 / 16, h * 0.66)
-            let pageH = max(200, h - heroH)
-            return VStack(spacing: 0) {
-                billboard(width: w, videoH: heroH)
-                    .frame(width: w, height: heroH)
-                ScrollView(.vertical) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(shelves) { shelf in
-                            shelfPage(shelf, pageH: pageH)
-                                .containerRelativeFrame(.vertical)
-                                .id(shelf.id)
-                        }
-                    }
-                    .scrollTargetLayout()
-                }
-                .scrollTargetBehavior(.paging)
-                .scrollPosition(id: $shelfID)
-                .scrollIndicators(.hidden)
-                .frame(height: pageH)
-            }
-    }
-
-    /// Hero: the movie's own trailer, muted and looped under a bottom fade
-    /// to black with the title on it. No play button — tap toggles mute,
-    /// tap the title (or context menu) plays the movie. No trailer on the
-    /// record, no video box: poster art instead of a black hole.
-    private func billboard(width: CGFloat, videoH: CGFloat) -> some View {
-        ZStack(alignment: .bottomLeading) {
-            ZStack {
+    private func heroCarousel(width: CGFloat) -> some View {
+        let movie = heroMovie
+        return ZStack(alignment: .bottom) {
+            if let movie {
+                PosterImage(url: billboardURL(movie), title: movie.displayTitle)
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+            } else {
                 Color.black
-                if let movie = heroMovie {
-                    if let clip = heroClip(movie) {
-                        HeroTrailer(url: clip.url, apiKey: clip.apiKey, muted: heroMuted)
-                            .id("file:\(clip.url.absoluteString)")
-                            .allowsHitTesting(false)
-                    } else if let key = youtubeKey(movie) {
-                        YouTubeTrailer(key: key, muted: heroMuted)
-                            .id("yt:\(key)")
-                            .allowsHitTesting(false)
-                    } else {
-                        billboardArt(movie)
-                    }
-                }
             }
-            .frame(width: width, height: videoH)
-            .clipped()
-            LinearGradient(colors: [.clear, .black.opacity(0.9)], startPoint: .center, endPoint: .bottom)
-                .allowsHitTesting(false)
-            if let movie = heroMovie {
-                VStack(alignment: .leading, spacing: 4) {
+            if playing == nil, let url = heroFileURL {
+                HeroTrailer(
+                    url: url,
+                    captionsURL: heroMovie?.trailerCaptions.flatMap(URL.init(string:)),
+                    apiKey: library.api.key,
+                    audible: trailerAudible,
+                    suspended: picked != nil
+                )
+                    .id(url.absoluteString)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture { trailerAudible.toggle() }
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel(trailerAudible ? "Mute trailer" : "Unmute trailer")
+            } else if playing == nil, let videoID = heroYouTubeID {
+                YouTubeTrailer(videoID: videoID)
+                    .id(videoID)
+                    .allowsHitTesting(false)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+            }
+            if let movie {
+                VStack(alignment: .leading, spacing: 10) {
                     Text(movie.displayTitle)
-                        .font(.system(size: 28, weight: .heavy))
+                        .font(.largeTitle.weight(.heavy))
+                        .fontDesign(.serif)
                         .foregroundStyle(.white)
                         .lineLimit(2)
-                    HStack(spacing: 8) {
+                    HStack(spacing: 10) {
                         if let p = movie.matchP, p > 0 {
                             Text("\(Int((p * 100).rounded()))% Match")
-                                .foregroundStyle(.green)
-                                .font(.subheadline.weight(.bold))
+                                .font(.subheadline.weight(.bold).smallCaps())
+                                .foregroundStyle(Cinema.ink)
                         }
                         if !movie.yearText.isEmpty { Text(movie.yearText) }
                         if let rt = movie.runtimeText { Text(rt) }
+                        Text("HD")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.7), lineWidth: 1))
                     }
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(.white.opacity(0.9))
+                    Button { play(movie) } label: {
+                        Label("Play", systemImage: "play.fill")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(.black)
+                            .padding(.vertical, 14)
+                            .padding(.horizontal, 28)
+                            .frame(maxWidth: isCompact ? .infinity : Cinema.playColumn, alignment: .leading)
+                            .background(.white, in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 16)
-                .contentShape(Rectangle())
-                .onTapGesture { play(movie) }
+                .padding(.horizontal, isCompact ? 20 : 32)
+                .padding(.vertical, 20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    LinearGradient(colors: [.clear, .black.opacity(0.85), .black], startPoint: .top, endPoint: .bottom)
+                )
             }
         }
-        .frame(width: width, height: videoH)
-        .contentShape(Rectangle())
-        .onTapGesture { heroMuted.toggle() }
-        .contextMenu { if let m = heroMovie { posterMenu(m) } }
-        .overlay(alignment: .bottomTrailing) {
-            if heroMovie != nil {
-                Button { heroMuted.toggle() } label: {
-                    Image(systemName: heroMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.75), radius: 4, y: 1)
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(heroMuted ? "Unmute trailer" : "Mute trailer")
-                .padding(.trailing, 14)
-                .padding(.bottom, 12)
+        .overlay(alignment: .topTrailing) {
+            if heroFileURL != nil, playing == nil {
+                Image(systemName: trailerAudible ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(10)
+                    .background(.black.opacity(0.45), in: Circle())
+                    .padding(16)
+                    .allowsHitTesting(false)
             }
         }
-    }
-
-    /// A real trailer from the record: server HD file first, then a direct
-    /// non-YouTube file. Never resolved client-side — dead third-party URLs
-    /// are what produced the black muted boxes.
-    private func heroClip(_ movie: Movie) -> (url: URL, apiKey: String?)? {
-        if let raw = movie.trailerFileUrl, let url = URL(string: raw), url.scheme == "https" {
-            let key = url.host?.contains("cornerstonecoatings.com") == true ? library.api.key : nil
-            return (url, key)
-        }
-        if movie.trailerSite != "youtube",
-           let raw = movie.trailerUrl, let url = URL(string: raw), url.scheme == "https" {
-            return (url, nil)
-        }
-        return nil
-    }
-
-    private func youtubeKey(_ movie: Movie) -> String? {
-        if movie.trailerSite == "youtube", let key = movie.trailerKey, !key.isEmpty { return key }
-        if let resolved = trailerKeys[movie.id], !resolved.isEmpty { return resolved }
-        return nil
-    }
-
-    /// No trailer on the record: ask Kinocheck (by IMDb id) for the English
-    /// pure trailer and embed it. Ends at the YouTube id — no MP4 resolution,
-    /// no third-party stream URLs, no black boxes.
-    private func resolveTrailerKey() async {
-        guard let movie = heroMovie,
-              heroClip(movie) == nil,
-              youtubeKey(movie) == nil,
-              trailerKeys[movie.id] == nil,
-              let imdb = movie.imdbId, !imdb.isEmpty,
-              let metaURL = URL(string: "https://api.kinocheck.com/movies?imdb_id=\(imdb)&language=en")
-        else { return }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: metaURL)
-            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-            trailerKeys[movie.id] = Self.pickTrailer(obj) ?? ""
-        } catch {
-            trailerKeys[movie.id] = ""
-        }
-    }
-
-    /// English pure trailer with the most views. Clips, talks, and specials
-    /// are not trailers.
-    private static func pickTrailer(_ obj: [String: Any]) -> String? {
-        var cands: [[String: Any]] = []
-        if let t = obj["trailer"] as? [String: Any] { cands.append(t) }
-        cands.append(contentsOf: (obj["videos"] as? [[String: Any]]) ?? [])
-        var best: String?
-        var bestViews = -1
-        for v in cands {
-            guard let yt = v["youtube_video_id"] as? String, !yt.isEmpty else { continue }
-            if let lang = v["language"] as? String, lang != "en" { continue }
-            let cats = (v["categories"] as? [String]) ?? []
-            guard cats.contains("Trailer"),
-                  !cats.contains("Clip"), !cats.contains("Talk"), !cats.contains("Special")
-            else { continue }
-            let views = (v["views"] as? Int) ?? 0
-            if views > bestViews { bestViews = views; best = yt }
-        }
-        return best
-    }
-
-    private func billboardArt(_ movie: Movie) -> some View {
-        PosterImage(url: billboardURL(movie), title: movie.displayTitle)
-            .scaledToFill()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
+        .frame(maxWidth: width, maxHeight: .infinity, alignment: .bottom)
     }
 
     private func billboardURL(_ movie: Movie) -> URL? {
@@ -319,40 +422,36 @@ struct LibraryView: View {
         return posters[movie.id]
     }
 
-    /// Big paged shelf, top-aligned with cards fitted to the page.
-    /// The old centered spacers left a dead black gap on tall pages.
-    private func shelfPage(_ s: Shelf, pageH: CGFloat) -> some View {
-        // Shrink cards to fit short pages instead of clipping them in half.
-        let cw = min(cardW, max(96, (pageH - 80) / 1.5))
-        let ch = cw * 1.5
-        return VStack(alignment: .leading, spacing: 10) {
+    private func shelfRow(_ s: Shelf, width window: CGFloat) -> some View {
+        let card = cardWidth(in: window)
+        return VStack(alignment: .leading, spacing: 12) {
             Text(s.title)
-                .font(.title3.weight(.bold))
+                .font(.headline.smallCaps())
                 .foregroundStyle(.white)
-                .padding(.horizontal, 20)
-                .padding(.top, 10)
+                .padding(.horizontal, isCompact ? 20 : 32)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(s.movies) { m in
-                        VStack(alignment: .leading, spacing: 6) {
-                            PosterImage(url: posters[m.id] ?? URL(string: m.thumbnailUrl ?? ""), title: m.displayTitle)
-                                .frame(width: cw, height: ch)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                            if s.id == "continue", let frac = continueFraction(m) {
-                                ProgressView(value: frac)
-                                    .tint(.red)
-                                    .frame(width: cw)
+                        NavigationLink(value: m) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                PosterImage(url: posters[m.id] ?? URL(string: m.thumbnailUrl ?? ""), title: m.displayTitle)
+                                    .frame(width: card, height: card * 1.5)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                if s.id == "continue", let frac = continueFraction(m) {
+                                    ProgressView(value: frac)
+                                        .tint(Cinema.red)
+                                        .frame(width: card)
+                                }
                             }
                         }
-                        .onTapGesture { play(m) }
+                        .buttonStyle(.plain)
                         .contextMenu { posterMenu(m) }
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, isCompact ? 20 : 32)
             }
-            Spacer(minLength: 0)
         }
-        .frame(height: pageH, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: isCompact ? .infinity : nil, alignment: .top)
     }
 
     private func continueFraction(_ m: Movie) -> Double? {
@@ -374,37 +473,121 @@ struct LibraryView: View {
     }
 
     private var controls: some View {
-        VStack(alignment: .trailing, spacing: 8) {
-            HStack { Spacer()
-                Button { importing = true } label: { Image(systemName: "plus").font(.system(size: 20, weight: .bold)).frame(width: 48, height: 48) }
-                .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel("Add a movie")
+        HStack { Spacer()
+            Menu {
+                Button { importing = true } label: { Label("Import File", systemImage: "square.and.arrow.down") }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 20, weight: .bold))
+                    .frame(width: 48, height: 48)
             }
-            // Auth / network failures are otherwise invisible on home:
-            // the list renders from disk cache while refresh fails.
-            if let msg = library.message {
-                Text(msg)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.red.opacity(0.85), in: RoundedRectangle(cornerRadius: 8))
-                    .onTapGesture { Task { await library.refresh() } }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("Add a movie")
+        }.padding(.horizontal, isCompact ? 14 : 24).padding(.top, 6)
+    }
+
+    private var topInset: CGFloat {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let window = scenes.flatMap(\.windows).first(where: \.isKeyWindow) ?? scenes.flatMap(\.windows).first
+        return window?.safeAreaInsets.top ?? 59
+    }
+
+    private var searchResultsList: some View {
+        Group {
+            if let searchError, searchResults.isEmpty {
+                ContentUnavailableView(searchError, systemImage: "exclamationmark.triangle")
+            } else {
+                List(searchResults) { result in
+                    Button { open(result) } label: {
+                        HStack(spacing: 14) {
+                            PosterImage(url: result.poster.flatMap(URL.init(string:)), title: result.displayTitle)
+                                .frame(width: 92, height: 138)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(result.displayTitle).font(.headline).foregroundStyle(.white)
+                                if let year = result.year { Text(String(year)).font(.subheadline).foregroundStyle(.white.opacity(0.6)) }
+                                Text(owned(result) == nil ? "Online" : "In your library")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.white.opacity(0.7))
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(Color.black)
+                    .listRowSeparator(.hidden)
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .contentMargins(.top, topInset + 12, for: .scrollContent)
+                .scrollIndicators(.hidden)
             }
-        }.padding(.horizontal, 14).padding(.top, 6)
+        }
+    }
+
+    private func owned(_ result: SourceSearchResult) -> Movie? {
+        library.movie(matching: result)
+    }
+
+    private func open(_ result: SourceSearchResult) {
+        if let movie = library.movie(matching: result) {
+            searchQuery = ""
+            searchPresented = false
+            play(movie)
+            return
+        }
+        picked = result
+    }
+
+    private func runSearch() async {
+        let term = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard term.count >= 2 else {
+            searchResults = []
+            searchError = nil
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(120))
+        guard !Task.isCancelled, term == searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        searchError = nil
+        do {
+            let found = if term.hasPrefix("tt"), term.count >= 9 {
+                try await library.sourceSearchByImdb(imdbId: term, source: "meta")
+            } else {
+                try await library.sourceSearch(query: term, source: "meta")
+            }
+            guard !Task.isCancelled else { return }
+            searchResults = found
+        } catch {
+            guard !Task.isCancelled else { return }
+            searchResults = []
+            let message = error.localizedDescription
+            searchError = message.contains("tmdb_unconfigured") ? "TMDB is not configured on the worker." : message
+        }
     }
 
     private var empty: some View {
         VStack(spacing: 18) {
             Text("WATCH").font(.system(size: 42, weight: .black)).tracking(2).foregroundStyle(Cinema.red)
             Text("Nothing here yet").font(.title2.weight(.bold))
-            Button { importing = true } label: { Label("Add a movie", systemImage: "plus").font(.headline.weight(.bold)).padding(.horizontal, 22).padding(.vertical, 12).background(.white, in: RoundedRectangle(cornerRadius: 4)).foregroundStyle(.black) }
+            VStack(spacing: 12) {
+                Button { importing = true } label: {
+                    Label("Import File", systemImage: "square.and.arrow.down")
+                        .font(.headline.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 8))
+                        .foregroundStyle(.black)
+                }
+
+            }
+            .padding(.horizontal, 40)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black)
     }
 
     private func handleImport(_ r: Result<[URL], Error>) {
         guard case .success(let urls) = r else { return }
         var items: [(URL, Bool)] = []
-        for u in urls { let ext = u.pathExtension.lowercased(); guard ["mp4","m4v","mov"].contains(ext) else { continue }; items.append((u, u.startAccessingSecurityScopedResource())) }
+        for u in urls { let ext = u.pathExtension.lowercased(); guard ["mp4","m4v","mov","mkv","webm","avi","flv","wmv","mpg","mpeg","m2v","m4s","ts","m2ts","vob","ogv","3gp","3g2"].contains(ext) else { continue }; items.append((u, u.startAccessingSecurityScopedResource())) }
         guard !items.isEmpty else { return }
         if items.count == 1, let only = items.first { pendingImport = only.0; pendingScoped = only.1 }
         else { library.importBulk(items) }
@@ -419,70 +602,171 @@ struct LibraryView: View {
         }
     }
 
+    /// TMDB YouTube id, stored by the worker. One lookup for the visible hero.
+    private func resolveStreamTrailer() async {
+        guard let movie = heroMovie,
+              movie.youTubeID == nil,
+              youtubeIDs[movie.id] == nil,
+              movie.imdbId?.isEmpty == false
+        else { return }
+        let id = movie.id
+        let imdb = movie.imdbId
+        if let yt = try? await library.api.resolveTrailer(id: id), !yt.isEmpty {
+            youtubeIDs[id] = yt
+            return
+        }
+        guard let imdb, let yt = await cinemetaYouTube(imdb), !yt.isEmpty else { return }
+        youtubeIDs[id] = yt
+    }
+
+    private func cinemetaYouTube(_ imdb: String) async -> String? {
+        guard let url = URL(string: "https://v3-cinemeta.strem.io/meta/movie/\(imdb).json") else { return nil }
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let meta = obj["meta"] as? [String: Any],
+              let streams = meta["trailerStreams"] as? [[String: Any]]
+        else { return nil }
+        return streams.compactMap { $0["ytId"] as? String }.first { !$0.isEmpty }
+    }
+
     private func play(_ m: Movie) { playing = m }
 }
 
-/// Native muted looping trailer. Poster stays underneath until first frame.
-/// Muted because it's ambience — tap the hero to unmute.
+
+private struct TrailerCue {
+    var start: Double
+    var end: Double
+    var text: String
+
+    static func parse(_ vtt: String) -> [TrailerCue] {
+        var cues: [TrailerCue] = []
+        let blocks = vtt.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n\n")
+        for block in blocks {
+            let lines = block.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            guard let timing = lines.first(where: { $0.contains("-->") }) else { continue }
+            let parts = timing.components(separatedBy: "-->")
+            guard parts.count >= 2 else { continue }
+            let start = seconds(parts[0])
+            let end = seconds(parts[1])
+            let text = lines.drop { !$0.contains("-->") }.dropFirst()
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            guard end > start, !text.isEmpty else { continue }
+            if cues.last?.text == text { continue }
+            cues.append(TrailerCue(start: start, end: end, text: text))
+        }
+        return cues
+    }
+
+    private static func seconds(_ raw: String) -> Double {
+        let clock = raw.split(separator: " ").first.map(String.init) ?? raw
+        let bits = clock.split(separator: ":").map { Double($0.replacingOccurrences(of: ",", with: ".")) ?? 0 }
+        if bits.count == 3 { return bits[0] * 3600 + bits[1] * 60 + bits[2] }
+        if bits.count == 2 { return bits[0] * 60 + bits[1] }
+        return bits.first ?? 0
+    }
+}
+
+private struct Shelf: Identifiable { let id: String; let title: String; let movies: [Movie] }
+/// Muted looping trailer file from R2. The poster stays visible until the first frame.
 private struct HeroTrailer: View {
     var url: URL
-    var apiKey: String?
-    var muted: Bool
+    var captionsURL: URL?
+    var apiKey: String
+    var audible: Bool
+    var suspended: Bool = false
     @State private var player: AVPlayer?
     @State private var ready = false
     @State private var tick: Any?
-    @State private var endObserver: (any NSObjectProtocol)?
+    @State private var cues: [TrailerCue] = []
+    @State private var shown = ""
 
     var body: some View {
         ZStack {
             Color.black
             if let player {
                 HeroPlayerLayer(player: player)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .opacity(ready ? 1 : 0)
-                    .animation(.easeIn(duration: 0.3), value: ready)
+            }
+        }
+        .background(Color.black)
+        .overlay(alignment: .bottom) {
+            if !shown.isEmpty {
+                Text(shown)
+                    .font(.system(size: 16, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 28)
             }
         }
         .onAppear { start() }
         .onDisappear { stop() }
-        .onChange(of: muted) { _, m in player?.isMuted = m }
+        .onChange(of: audible) { _, on in applyAudio(on) }
+        .onChange(of: suspended) { _, hold in
+            if hold { player?.pause() } else { player?.play() }
+        }
+        .task(id: captionsURL) { await loadCaptions() }
+    }
+
+    private func loadCaptions() async {
+        cues = []
+        shown = ""
+        guard let captionsURL else { return }
+        var request = URLRequest(url: captionsURL)
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let text = String(data: data, encoding: .utf8)
+        else { return }
+        cues = TrailerCue.parse(text)
     }
 
     private func start() {
         stop()
         ready = false
         var finalURL = url
-        if let apiKey, var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+        if var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) {
             comps.queryItems = (comps.queryItems ?? []) + [URLQueryItem(name: "key", value: apiKey)]
             finalURL = comps.url ?? url
         }
-        let asset: AVURLAsset
-        if let apiKey {
-            asset = AVURLAsset(url: finalURL, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(apiKey)"]])
-        } else {
-            asset = AVURLAsset(url: finalURL)
-        }
+        let asset = AVURLAsset(url: finalURL, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(apiKey)"]])
         let next = AVPlayer(playerItem: AVPlayerItem(asset: asset))
-        next.isMuted = muted
+        next.isMuted = !audible
         next.allowsExternalPlayback = false
         next.actionAtItemEnd = .none
-        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: next.currentItem, queue: .main) { _ in
+        NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: next.currentItem, queue: .main) { _ in
             next.seek(to: .zero)
             next.play()
         }
         tick = next.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { time in
-            if time.seconds > 0.05 { Task { @MainActor in ready = true } }
+            let seconds = time.seconds
+            Task { @MainActor in
+                if seconds > 0.05 { ready = true }
+                let line = cues.first { seconds >= $0.start && seconds < $0.end }?.text ?? ""
+                if line != shown { shown = line }
+            }
         }
         player = next
-        next.play()
+        applyAudio(audible)
+        if !suspended { next.play() }
+    }
+
+    private func applyAudio(_ on: Bool) {
+        player?.isMuted = !on
+        guard on else { return }
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
     }
 
     private func stop() {
         if let player, let tick { player.removeTimeObserver(tick) }
         tick = nil
-        if let endObserver {
-            NotificationCenter.default.removeObserver(endObserver)
-            self.endObserver = nil
-        }
         ready = false
         player?.pause()
         player = nil
@@ -491,75 +775,67 @@ private struct HeroTrailer: View {
 
 private struct HeroPlayerLayer: UIViewRepresentable {
     let player: AVPlayer
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .black
-        let layer = AVPlayerLayer(player: player)
-        layer.videoGravity = .resizeAspectFill
-        layer.frame = view.bounds
-        view.layer.addSublayer(layer)
+    func makeUIView(context: Context) -> PlayerHost {
+        let view = PlayerHost()
+        view.playerLayer.player = player
+        view.playerLayer.videoGravity = .resizeAspect
         return view
     }
-
-    func updateUIView(_ view: UIView, context: Context) {
-        (view.layer.sublayers?.first as? AVPlayerLayer)?.frame = view.bounds
+    func updateUIView(_ view: PlayerHost, context: Context) {
+        view.playerLayer.player = player
+        view.playerLayer.frame = view.bounds
     }
 }
 
-private struct Shelf: Identifiable { let id: String; let title: String; let movies: [Movie] }
+private final class PlayerHost: UIView {
+    let playerLayer = AVPlayerLayer()
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        playerLayer.videoGravity = .resizeAspect
+        layer.addSublayer(playerLayer)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        playerLayer.frame = bounds
+    }
+}
 
-/// Last-resort hero: the movie's own YouTube key, muted loop. Only used when
-/// there is no server trailer file. The mute toggle is forwarded in.
+/// Muted looping YouTube trailer. The poster stays visible behind the web view.
 private struct YouTubeTrailer: UIViewRepresentable {
-    var key: String
-    var muted: Bool
+    var videoID: String
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsInlineMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = []
         let web = WKWebView(frame: .zero, configuration: config)
         web.isOpaque = false
-        web.backgroundColor = .black
+        web.backgroundColor = .clear
         web.scrollView.isScrollEnabled = false
-        web.scrollView.bounces = false
-        web.loadHTMLString(Self.page(key: key), baseURL: nil)
-        context.coordinator.key = key
-        context.coordinator.muted = muted
+        web.scrollView.backgroundColor = .clear
         return web
     }
 
     func updateUIView(_ web: WKWebView, context: Context) {
-        if context.coordinator.key != key {
-            context.coordinator.key = key
-            web.loadHTMLString(Self.page(key: key), baseURL: nil)
-        } else if context.coordinator.muted != muted {
-            context.coordinator.muted = muted
-            web.evaluateJavaScript(muted ? "window.__p&&window.__p.mute()" : "window.__p&&window.__p.unMute()", completionHandler: nil)
-        }
+        guard context.coordinator.loadedID != videoID else { return }
+        context.coordinator.loadedID = videoID
+        let src = "https://www.youtube-nocookie.com/embed/\(videoID)?autoplay=1&mute=1&playsinline=1&controls=0&loop=1&playlist=\(videoID)&rel=0"
+        let html = """
+        <!DOCTYPE html><html><head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>html,body{margin:0;background:transparent;height:100%}iframe{position:absolute;inset:0;width:100%;height:100%;border:0}</style>
+        </head><body>
+        <iframe src="\(src)" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+        </body></html>
+        """
+        web.loadHTMLString(html, baseURL: URL(string: "https://www.youtube-nocookie.com"))
     }
 
-    final class Coordinator {
-        var key: String?
-        var muted = true
-    }
-
-    static func page(key: String) -> String {
-        """
-        <html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"></head>
-        <body style="margin:0;background:#000;overflow:hidden">
-        <div id="p" style="position:absolute;top:0;left:0;width:100%;height:100%"></div>
-        <script src="https://www.youtube.com/iframe_api"></script>
-        <script>
-        function onYouTubeIframeAPIReady(){
-          window.__p=new YT.Player('p',{videoId:'\(key)',playerVars:{autoplay:1,mute:1,controls:0,playsinline:1,rel:0,loop:1,playlist:'\(key)',modestbranding:1},events:{onReady:function(e){e.target.playVideo();}}});
-        }
-        </script></body></html>
-        """
-    }
+    final class Coordinator { var loadedID: String? }
 }
 
 extension Collection {

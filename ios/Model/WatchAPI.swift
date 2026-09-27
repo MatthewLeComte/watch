@@ -1,20 +1,71 @@
 import Foundation
+import CryptoKit
 
 struct WatchAPI: Sendable {
     var base: URL
     var key: String
     private let session: URLSession
+    /// Ed25519 private key (base64-encoded raw 32 bytes) for signing source requests.
+    /// Stored in Keychain; loaded at runtime.
+    var ed25519PrivateKey: String?
 
-    init(base: URL, key: String, session: URLSession = .shared) {
+    init(base: URL, key: String, session: URLSession = .shared, ed25519PrivateKey: String? = nil) {
         self.base = base
         self.key = key
         self.session = session
+        self.ed25519PrivateKey = ed25519PrivateKey
     }
 
     func items() async throws -> [Movie] {
         let data = try await send(path: "v1/items", method: "GET")
         return try JSONDecoder().decode(ItemList.self, from: data).items
     }
+
+    // MARK: - Sources (generic)
+
+    /// List available sources.
+    func listSources() async throws -> [SourceInfo] {
+        let data = try await send(path: "v1/sources", method: "GET")
+        return try JSONDecoder().decode([SourceInfo].self, from: data)
+    }
+
+    /// Search a source by query string.
+    func sourceSearch(query: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+        let data = try await send(path: "v1/sources/search", method: "GET", query: [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "source", value: source)
+        ])
+        return try JSONDecoder().decode([SourceSearchResult].self, from: data)
+    }
+
+    /// Search a source by IMDb ID.
+    func sourceSearchByImdb(imdbId: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+        let data = try await send(path: "v1/sources/search", method: "GET", query: [
+            URLQueryItem(name: "imdb", value: imdbId),
+            URLQueryItem(name: "source", value: source)
+        ])
+        return try JSONDecoder().decode([SourceSearchResult].self, from: data)
+    }
+
+    /// Resolve a source item to stream info (master playlist, qualities, subtitles).
+    func sourceResolve(source: String, id: String) async throws -> SourceStreamInfo {
+        let data = try await send(path: "v1/sources/\(source)/resolve/\(id)", method: "GET")
+        return try JSONDecoder().decode(SourceStreamInfo.self, from: data)
+    }
+
+    /// Download the selected quality to the library.
+    func sourceDownload(source: String, stream: SourceStreamInfo, qualityHeight: Int, subtitleLang: String?) async throws -> Movie {
+        var obj: [String: Any] = [
+            "stream": stream.toDictionary(),
+            "quality": ["height": qualityHeight]
+        ]
+        if let subtitleLang { obj["subtitleLang"] = subtitleLang }
+        let body = try JSONSerialization.data(withJSONObject: obj)
+        let data = try await send(path: "v1/sources/\(source)/download", method: "POST", body: body, contentType: "application/json")
+        return try JSONDecoder().decode(Movie.self, from: data)
+    }
+
+    // MARK: - Existing Methods
 
     func create(filename: String, byteSize: Int64) async throws -> (id: String, partSize: Int) {
         let body = try JSONSerialization.data(withJSONObject: [
@@ -27,7 +78,10 @@ struct WatchAPI: Sendable {
     }
 
     func uploadPart(id: String, part: Int, file: URL) async throws {
-        let url = base.appendingPathComponent("v1/items/\(id)/parts/\(part)")
+        guard let components = URLComponents(url: base.appendingPathComponent("v1/items/\(id)/parts/\(part)"), resolvingAgainstBaseURL: false),
+              let url = components.url
+        else { throw WatchError.server("Bad URL") }
+        _ = components
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
@@ -83,6 +137,16 @@ struct WatchAPI: Sendable {
         return try await send(path: "v1/items/\(id)/media", method: "GET", range: "bytes=\(offset)-\(end)")
     }
 
+    func resolveTrailer(id: String) async throws -> String? {
+        let data = try await send(
+            path: "v1/items/\(id)/trailer/resolve",
+            method: "POST",
+            body: Data("{}".utf8),
+            contentType: "application/json"
+        )
+        return try JSONDecoder().decode(TrailerResolve.self, from: data).ytId
+    }
+
     func poster(id: String) async throws -> Data {
         try await send(path: "v1/items/\(id)/poster", method: "GET")
     }
@@ -123,7 +187,17 @@ struct WatchAPI: Sendable {
         guard let url = components.url else { throw WatchError.server("Bad URL") }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+
+        // Determine auth method: Ed25519 for source endpoints (except search), Bearer for others
+        let isSourceAuthedEndpoint = path.starts(with: "v1/sources/") &&
+            (path.contains("/resolve/") || path.contains("/download"))
+
+        if isSourceAuthedEndpoint {
+            try addEd25519Headers(to: &request)
+        } else {
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        }
+
         request.setValue("Watch/1", forHTTPHeaderField: "User-Agent")
         if let contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
         if let range { request.setValue(range, forHTTPHeaderField: "Range") }
@@ -137,7 +211,115 @@ struct WatchAPI: Sendable {
         }
         return data
     }
+
+    /// Add Ed25519 signature headers: watch_public_key, watch_signature, watch_timestamp, watch_nonce
+    private func addEd25519Headers(to request: inout URLRequest) throws {
+        guard let privB64 = ed25519PrivateKey,
+              let privData = Data(base64Encoded: privB64)
+        else {
+            throw WatchError.server("Ed25519 private key not configured")
+        }
+
+        let privKey = try Curve25519.Signing.PrivateKey(rawRepresentation: privData)
+        let pubKey = privKey.publicKey
+        let pubB64 = pubKey.rawRepresentation.base64EncodedString()
+
+        let timestamp = String(Int(Date().timeIntervalSince1970 * 1000)) // ms since epoch
+        let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(32)
+        let message = "\(timestamp).\(nonce)"
+        let messageData = Data(message.utf8)
+
+        let signature = try privKey.signature(for: messageData)
+        let sigB64 = signature.base64EncodedString()
+
+        request.setValue(pubB64, forHTTPHeaderField: "watch_public_key")
+        request.setValue(sigB64, forHTTPHeaderField: "watch_signature")
+        request.setValue(timestamp, forHTTPHeaderField: "watch_timestamp")
+        request.setValue(String(nonce), forHTTPHeaderField: "watch_nonce")
+    }
 }
 
+// MARK: - Source Types
+
+struct SourceInfo: Codable, Hashable, Sendable, Identifiable {
+    var id: String { key }
+    var key: String
+    var name: String
+}
+
+// MARK: - 67movies Types
+
+struct SourceSearchResult: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var tmdbId: Int?
+    var title: String
+    var year: Int?
+    var imdbId: String?
+    var poster: String?
+    var type: String
+
+    var displayTitle: String {
+        if let year { return "\(title) (\(year))" }
+        return title
+    }
+}
+
+struct SourceQuality: Codable, Hashable, Sendable, Identifiable {
+    var id: String { "\(height)" }
+    var height: Int
+    var bandwidth: Int
+    var codecs: String
+    var uri: String
+
+    var label: String {
+        "\(height)p • \(bandwidth / 1_000_000) Mbps"
+    }
+}
+
+struct SourceSubtitle: Codable, Hashable, Sendable, Identifiable {
+    var id: String { lang }
+    var lang: String
+    var label: String
+    var uri: String
+    var forced: Bool
+}
+
+struct SourceStreamInfo: Codable, Hashable, Sendable {
+    var id: String
+    var title: String
+    var year: Int?
+    var imdbId: String?
+    var poster: String?
+    var hlsUrl: String
+    var qualities: [SourceQuality]
+    var subtitles: [SourceSubtitle]
+
+    func toDictionary() -> [String: Any] {
+        [
+            "id": id,
+            "title": title,
+            "year": year ?? NSNull(),
+            "imdbId": imdbId ?? NSNull(),
+            "poster": poster ?? NSNull(),
+            "hlsUrl": hlsUrl,
+            "qualities": qualities.map { $0.toDictionary() },
+            "subtitles": subtitles.map { $0.toDictionary() }
+        ]
+    }
+}
+
+extension SourceQuality {
+    func toDictionary() -> [String: Any] {
+        ["height": height, "bandwidth": bandwidth, "codecs": codecs, "uri": uri]
+    }
+}
+
+extension SourceSubtitle {
+    func toDictionary() -> [String: Any] {
+        ["lang": lang, "label": label, "uri": uri, "forced": forced]
+    }
+}
+
+private struct TrailerResolve: Codable { var ytId: String? }
 private struct CreateBody: Codable { var id: String; var partSize: Int }
 private struct ErrorBody: Codable { var error: String }

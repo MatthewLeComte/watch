@@ -22,6 +22,8 @@ struct Movie: Codable, Hashable, Identifiable, Sendable {
     var runtimeMin: Int?
     var genres: [String]
     var imdbId: String?
+    /// TMDB movie id. Same number a search result uses in `meta:{id}`.
+    var tmdbId: Int?
     var osHash: String?
     var streamId: String?
     var hlsUrl: String?
@@ -33,7 +35,29 @@ struct Movie: Codable, Hashable, Identifiable, Sendable {
     var trailerSite: String?
     var trailerKey: String?
     var trailerUrl: String?
+    /// Catalog JSON uses `trailer` for the YouTube watch URL.
+    var trailer: String?
+
+    var youTubeID: String? {
+        if let trailerKey, !trailerKey.isEmpty { return trailerKey }
+        let raw = trailerUrl ?? trailer
+        guard let raw, let parts = URLComponents(string: raw) else { return nil }
+        if let v = parts.queryItems?.first(where: { $0.name == "v" })?.value, !v.isEmpty { return v }
+        let last = parts.path.split(separator: "/").last.map(String.init)
+        if parts.host?.contains("youtu.be") == true { return last }
+        return nil
+    }
     var trailerFileUrl: String?
+    /// Catalog JSON uses `trailerFile` for the R2 MP4.
+    var trailerFile: String?
+
+    var trailerFilePlayURL: URL? {
+        let raw = trailerFile ?? trailerFileUrl
+        guard let raw, !raw.isEmpty else { return nil }
+        return URL(string: raw)
+    }
+    /// English captions for the trailer file, when YouTube had them.
+    var trailerCaptions: String?
     var status: String
     var matchSource: String
     var matchP: Double?

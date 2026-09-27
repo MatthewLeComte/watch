@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DetailView: View {
     @Environment(LibraryModel.self) private var library
+    @Environment(\.horizontalSizeClass) private var hSize
     var movieID: String
     @State private var playMovie: Movie?
     @State private var poster: URL?
@@ -11,31 +12,46 @@ struct DetailView: View {
     var body: some View {
         Group {
             if let movie {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ZStack(alignment: .bottomLeading) {
-                            PosterImage(url: poster ?? URL(string: movie.thumbnailUrl ?? ""), title: movie.displayTitle)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 460)
-                                .clipped()
-                            LinearGradient(colors: [.clear, .black], startPoint: .center, endPoint: .bottom)
-                            Text(movie.displayTitle)
-                                .font(.system(size: 40, weight: .heavy))
-                                .foregroundStyle(.white)
-                                .padding(20)
-                        }
-                        .frame(maxWidth: .infinity)
-                        VStack(alignment: .leading, spacing: 18) {
+                content(for: movie)
+            } else {
+                ContentUnavailableView("Movie removed", systemImage: "film")
+            }
+        }
+        .task {
+            if let movie {
+                poster = await library.posterURL(for: movie.id)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func content(for movie: Movie) -> some View {
+        GeometryReader { geo in
+            let artH = hSize == .compact
+                ? max(220, min(geo.size.height * 0.38, 360))
+                : min(geo.size.height * 0.42, 520)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ZStack(alignment: .bottomLeading) {
+                        PosterImage(url: poster ?? URL(string: movie.thumbnailUrl ?? ""), title: movie.displayTitle)
+                            .scaledToFill()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: artH)
+                            .clipped()
+                        LinearGradient(colors: [.clear, .black], startPoint: .center, endPoint: .bottom)
+                        Text(movie.displayTitle)
+                            .font(.largeTitle.weight(.heavy))
+                            .fontDesign(.serif)
+                            .foregroundStyle(.white)
+                            .padding(20)
+                    }
+                    .frame(maxWidth: .infinity)
+                    VStack(alignment: .leading, spacing: 18) {
                         Text(meta(movie))
                             .foregroundStyle(Cinema.mute)
                         if !movie.overview.isEmpty {
                             Text(movie.overview)
                                 .foregroundStyle(Cinema.ink.opacity(0.9))
-                        }
-                        if movie.matchSource != "manual", !movie.matchNote.isEmpty {
-                            Text(movie.matchNote)
-                                .font(.footnote)
-                                .foregroundStyle(Cinema.mute)
                         }
                         HStack(spacing: 12) {
                             Button {
@@ -44,16 +60,17 @@ struct DetailView: View {
                                 Label("Play", systemImage: "play.fill")
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.white)
-                            .foregroundStyle(.black)
+                            .buttonStyle(.glassProminent)
+                            .controlSize(.large)
                             Button {
                                 library.download(movie)
                             } label: {
-                                Label(downloadLabel(movie), systemImage: "arrow.down")
+                                Label(downloadLabel(movie), systemImage: (library.fractions[movie.id] ?? 0) >= 0.999 ? "checkmark" : "arrow.down")
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
+                            .controlSize(.large)
+                            .overlay { SaveRing(progress: library.downloading[movie.id]) }
                             .disabled((library.fractions[movie.id] ?? 0) >= 0.999)
                         }
                         if let progress = library.downloading[movie.id] {
@@ -95,19 +112,15 @@ struct DetailView: View {
                                 .foregroundStyle(Cinema.ink)
                             }
                         }
-                        }
-                        .padding(20)
                     }
+                    .padding(20)
+                    .frame(maxWidth: Cinema.column, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .background(Color.black.ignoresSafeArea())
-                .navigationTitle(movie.displayTitle)
-                .modifier(FullScreenPlayer(movie: $playMovie))
-                .task {
-                    poster = await library.posterURL(for: movie.id)
-                }
-            } else {
-                ContentUnavailableView("Movie removed", systemImage: "film")
             }
+            .background(Color.black.ignoresSafeArea())
+            .navigationBarTitleDisplayMode(.inline)
+            .modifier(FullScreenPlayer(movie: $playMovie))
         }
     }
 
@@ -119,7 +132,7 @@ struct DetailView: View {
     }
 
     private func downloadLabel(_ movie: Movie) -> String {
-        if (library.fractions[movie.id] ?? 0) >= 0.999 { return "On this device" }
+        if (library.fractions[movie.id] ?? 0) >= 0.999 { return "Downloaded" }
         if library.downloading[movie.id] != nil { return "Saving" }
         return "Download"
     }

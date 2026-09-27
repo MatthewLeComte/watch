@@ -26,10 +26,12 @@ final class LibraryModel {
     /// Set by onOpenURL (share sheet / document types). LibraryView routes
     /// it into the dedicated import page.
     var openImport: URL?
+    var focusID: String?
     var openImportScoped = false
     var downloading: [String: Double] = [:]
     var serverText: String
     var keyText: String
+    var ed25519PrivateKeyText: String = ""
 
     let media = MediaStore()
     private var downloads: [String: Task<Void, Never>] = [:]
@@ -38,6 +40,7 @@ final class LibraryModel {
     init() {
         serverText = defaults.string(forKey: "watch.server") ?? WatchBuiltIn.server
         keyText = defaults.string(forKey: "watch.key") ?? WatchBuiltIn.key
+        ed25519PrivateKeyText = defaults.string(forKey: "watch.ed25519PrivateKey") ?? ""
         if let data = try? Data(contentsOf: Self.cacheURL()),
            let list = try? JSONDecoder().decode([Movie].self, from: data) {
             movies = list
@@ -48,10 +51,21 @@ final class LibraryModel {
         }
     }
 
+    /// Same TMDB id the search result already carries. Nothing else.
+    func movie(matching result: SourceSearchResult) -> Movie? {
+        guard let tmdb = result.tmdbId else { return nil }
+        return movies.first { $0.tmdbId == tmdb }
+    }
+
     var api: WatchAPI {
         let trimmed = serverText.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let url = URL(string: trimmed) ?? URL(string: WatchBuiltIn.server)!
-        return WatchAPI(base: url, key: keyText.trimmingCharacters(in: .whitespacesAndNewlines))
+        let edKey = ed25519PrivateKeyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return WatchAPI(
+            base: url,
+            key: keyText.trimmingCharacters(in: .whitespacesAndNewlines),
+            ed25519PrivateKey: edKey.isEmpty ? nil : edKey
+        )
     }
 
     func boot() async {
@@ -63,6 +77,7 @@ final class LibraryModel {
     func saveSettings() {
         defaults.set(serverText.trimmingCharacters(in: CharacterSet(charactersIn: "/")), forKey: "watch.server")
         defaults.set(keyText.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "watch.key")
+        defaults.set(ed25519PrivateKeyText.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "watch.ed25519PrivateKey")
     }
 
     func refresh() async {
@@ -93,13 +108,16 @@ final class LibraryModel {
     func cachePosters() async {
         await withTaskGroup(of: Void.self) { group in
             for movie in movies {
-                group.addTask { [self] in _ = await media.posterFile(api: api, id: movie.id) }
+                group.addTask { [self] in
+                    _ = await media.posterFile(api: api, id: movie.id, knownURL: URL(string: movie.posterUrl ?? ""))
+                }
             }
         }
     }
 
     func posterURL(for id: String) async -> URL? {
-        await media.posterFile(api: api, id: id)
+        let known = movies.first { $0.id == id }.flatMap { URL(string: $0.posterUrl ?? "") }
+        return await media.posterFile(api: api, id: id, knownURL: known)
     }
 
     func remember(position: Double, for id: String) {
@@ -160,6 +178,33 @@ final class LibraryModel {
         }
     }
 
+    // MARK: - Sources (generic)
+
+    /// List available sources.
+    func listSources() async throws -> [SourceInfo] {
+        try await api.listSources()
+    }
+
+    /// Search a source by query.
+    func sourceSearch(query: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+        try await api.sourceSearch(query: query, source: source)
+    }
+
+    /// Search a source by IMDb ID.
+    func sourceSearchByImdb(imdbId: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+        try await api.sourceSearchByImdb(imdbId: imdbId, source: source)
+    }
+
+    /// Resolve a source item to stream info.
+    func sourceResolve(source: String, id: String) async throws -> SourceStreamInfo {
+        try await api.sourceResolve(source: source, id: id)
+    }
+
+    /// Download the selected quality to the library.
+    func sourceDownload(source: String, stream: SourceStreamInfo, qualityHeight: Int, subtitleLang: String?) async throws -> Movie {
+        try await api.sourceDownload(source: source, stream: stream, qualityHeight: qualityHeight, subtitleLang: subtitleLang)
+    }
+
     func rematch(_ movie: Movie) async {
         do {
             let updated = try await api.rematch(id: movie.id)
@@ -200,11 +245,17 @@ final class LibraryModel {
             let data = try Data(contentsOf: url)
             let type = url.pathExtension.lowercased() == "png" ? "image/png" : "image/jpeg"
             try await api.putPoster(id: movie.id, data: data, contentType: type)
+            let folder = FileManager.default.temporaryDirectory
+            _ = folder
             try? await media.removePoster(id: movie.id)
             _ = await media.posterFile(api: api, id: movie.id)
         } catch {
             message = error.localizedDescription
         }
+    }
+
+    func cachePlaylists() async {
+        await media.cachePlaylists(api: api, movies: movies)
     }
 
     func download(_ movie: Movie) {
@@ -230,6 +281,14 @@ final class LibraryModel {
             }
             downloads[movie.id] = nil
         }
+    }
+
+    func clearDownload(_ movie: Movie) async {
+        downloads[movie.id]?.cancel()
+        downloads[movie.id] = nil
+        downloading[movie.id] = nil
+        try? await media.removePlayback(id: movie.id)
+        fractions[movie.id] = 0
     }
 
     func removeLocal(_ movie: Movie) async {

@@ -49,6 +49,8 @@ struct SettingsView: View {
                     }
                 }
                 .padding(24)
+                .frame(maxWidth: Cinema.column, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
             .background(Cinema.bg.ignoresSafeArea())
             .toolbar {
@@ -127,6 +129,8 @@ struct CorrectMatchView: View {
                     .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || saving)
                 }
                 .padding(24)
+                .frame(maxWidth: Cinema.column, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
             .background(Cinema.bg.ignoresSafeArea())
             .navigationTitle("Correct match")
