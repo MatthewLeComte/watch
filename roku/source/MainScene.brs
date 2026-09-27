@@ -4,6 +4,7 @@ sub Init()
   m.player.visible = false
   m.keyCatcher = m.top.findNode("keyCatcher")
   m.player.ObserveField("state", "OnPlayerState")
+  StyleTrickPlay()
   m.grid.ObserveField("itemSelected", "OnGridSelect")
   m.current = "grid"
   m.playTries = 0
@@ -67,27 +68,59 @@ sub OnGridSelect()
   StartPlayback(it)
 end sub
 
+sub StyleTrickPlay()
+  bar = m.player.trickPlayBar
+  if bar = invalid then return
+  bar.filledBarImageUri = "pkg:/images/filled-bar.png"
+end sub
+
 sub StartPlayback(it as Object)
   print "Playing: " + it.itemId
   m.playTries = 0
   content = CreateObject("roSGNode", "ContentNode")
-  content.url = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/index.m3u8?key=" + m.reg.Read("apiKey")
+  apiKey = m.reg.Read("apiKey")
+  bifUrl = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/trick.bif?key=" + apiKey
+  content.url = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/index.m3u8?key=" + apiKey
   content.streamFormat = "hls"
   content.title = it.itemTitle
-  content.HttpHeaders = ["Authorization: Bearer " + m.reg.Read("apiKey")]
+  content.HttpHeaders = ["Authorization: Bearer " + apiKey]
+  content.SDBifUrl = bifUrl
+  content.HDBifUrl = bifUrl
+  content.FHDBifUrl = bifUrl
   m.player.content = content
   m.player.visible = true
   m.grid.visible = false
   m.header.visible = false
   m.titleLabel.visible = false
   m.keyCatcher.visible = true
-  m.keyCatcher.SetFocus(true)
   m.player.control = "play"
+  m.keyCatcher.SetFocus(true)
+  ShowScrubBar()
   m.current = "player"
+end sub
+
+sub ShowScrubBar()
+  bar = m.player.trickPlayBar
+  if bar = invalid then return
+  bar.visible = true
+end sub
+
+sub Scrub(dir as Integer)
+  at = m.player.position
+  if at = invalid then at = 0
+  at = at + dir
+  if at < 0 then at = 0
+  m.player.seek = at
+  m.player.control = "play"
+  ShowScrubBar()
 end sub
 
 sub OnPlayerState()
   print "Player state: " + m.player.state
+  if m.player.state = "playing" and m.current = "player"
+    m.keyCatcher.SetFocus(true)
+    ShowScrubBar()
+  end if
   if m.player.state = "finished"
     print "Player finished"
     ReturnToGrid()
@@ -135,26 +168,21 @@ function OnKeyEvent(k, p) as Boolean
     return true
   end if
   if m.current = "player"
-    if k = "Right" or k = "Left"
-      seekPos = m.player.position
-      if seekPos = invalid then seekPos = 0
-      if k = "Right"
-        seekPos = seekPos + 10
-      else
-        seekPos = seekPos - 10
-      end if
-      if seekPos < 0 then seekPos = 0
-      print "Seek " + k
-      m.player.seek = seekPos
-      m.player.control = "play"
+    if k = "right" or k = "fastforward"
+      Scrub(1)
       return true
     end if
-    if k = "OK" or k = "Play"
+    if k = "left" or k = "rewind"
+      Scrub(-1)
+      return true
+    end if
+    if k = "OK" or k = "play"
       if m.player.state = "paused"
         m.player.control = "resume"
-      else if m.player.state = "playing"
+      else
         m.player.control = "pause"
       end if
+      ShowScrubBar()
       return true
     end if
   end if
