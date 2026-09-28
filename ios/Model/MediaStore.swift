@@ -15,11 +15,27 @@ actor MediaStore {
     }
 
     func playableFile(_ movie: Movie) -> URL? {
-        // Check for native HLS download first
-        if let hlsFile = try? hlsPlayableFile(movie.id) { return hlsFile }
-        // Fallback to byte-range file
-        guard isComplete(id: movie.id, byteSize: movie.byteSize) else { return nil }
-        return try? directory(id: movie.id).appendingPathComponent("movie.\(movie.ext)")
+        // 1. Byte-range MP4/MKV: complete file, no expiration, perfect for AirPlay offline
+        if isComplete(id: movie.id, byteSize: movie.byteSize),
+           let url = try? directory(id: movie.id).appendingPathComponent("movie.\(movie.ext)"),
+           FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
+        // 2. Exported MP4 (converted from HLS): single file, no expiration
+        if let exported = try? exportedMP4URL(id: movie.id) {
+            return exported
+        }
+        // 3. HLS .movpkg: LAST RESORT — only for offline scrubbing when NOT AirPlaying
+        if let hlsFile = try? hlsPlayableFile(movie.id) {
+            return hlsFile
+        }
+        return nil
+    }
+
+    /// Returns the exported MP4 URL if it exists (created after HLS download).
+    func exportedMP4URL(id: String) -> URL? {
+        let file = try? directory(id: id).appendingPathComponent("movie.mp4")
+        return (file != nil && FileManager.default.fileExists(atPath: file!.path)) ? file : nil
     }
 
     func isComplete(id: String, byteSize: Int64) -> Bool {
@@ -364,6 +380,23 @@ final class HLSDownloadSession: NSObject, AVAssetDownloadDelegate {
                     try FileManager.default.removeItem(at: dest)
                 }
                 try FileManager.default.moveItem(at: location, to: dest)
+                
+                // Auto-export HLS .movpkg → movie.mp4 for permanent AirPlay offline support
+                Task.detached {
+                    do {
+                        let mp4 = try await self.mediaStore.exportUnifiedVideo(movpkg: dest, name: "movie")
+                        // Rename to fixed movie.mp4 in the same directory
+                        let finalMP4 = dest.deletingLastPathComponent().appendingPathComponent("movie.mp4")
+                        if FileManager.default.fileExists(atPath: finalMP4.path) {
+                            try FileManager.default.removeItem(at: finalMP4)
+                        }
+                        try FileManager.default.moveItem(at: mp4, to: finalMP4)
+                        print("✅ Auto-exported HLS to MP4 for offline AirPlay: \(finalMP4.path)")
+                    } catch {
+                        print("⚠️ Auto-export failed: \(error)")
+                    }
+                }
+                
                 self.continuation?.resume(returning: dest)
             } catch {
                 self.continuation?.resume(throwing: error)

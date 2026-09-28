@@ -208,6 +208,39 @@ export default {
       }
     }
 
+    // GET /v1/sources/meta/download/:tmdbId — direct file stream (auto-best quality)
+    // Supports movie: /v1/sources/meta/download/27205
+    // Supports TV:   /v1/sources/meta/download/60625?season=1&episode=1
+    // Auth: Bearer or ?key= (same as library)
+    const directDownload = path.match(/^\/(?:api|v1)\/sources\/meta\/download\/(\d+)\/?$/i);
+    if (directDownload && request.method === "GET") {
+      if (!libraryAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
+      const tmdbId = Number(directDownload[1]!);
+      const url = new URL(request.url);
+      const season = url.searchParams.get("season") ? Number(url.searchParams.get("season")!) : 1;
+      const episode = url.searchParams.get("episode") ? Number(url.searchParams.get("episode")!) : 1;
+      const meta = SOURCES.get("meta");
+      if (!meta) return json({ error: "source_not_found" }, 404);
+      try {
+        const id = season > 1 || episode > 1 ? `meta:tv:${tmdbId}:${season}:${episode}` : `meta:${tmdbId}`;
+        const stream = await meta.resolve(env, id);
+        if (!stream) return json({ error: "not_found" }, 404);
+        // Auto-best quality: highest height, then highest bandwidth
+        const bestQuality = stream.qualities.reduce((best, q) =>
+          !best || q.height > best.height || (q.height === best.height && q.bandwidth > best.bandwidth) ? q : best
+        );
+        if (!bestQuality) return json({ error: "no_quality" }, 500);
+        // Proxy the variant playlist as a direct stream (segments proxied through worker)
+        const baseUrl = stream.hlsUrl.substring(0, stream.hlsUrl.lastIndexOf("/") + 1);
+        const variantUrl = bestQuality.uri.startsWith("http") ? bestQuality.uri : baseUrl + bestQuality.uri;
+        return proxyHlsVariant(env, variantUrl, request, stream.title, stream.contentType || "video/mp4");
+      } catch (err) {
+        if (err instanceof TmdbUnconfigured) return json({ error: "tmdb_unconfigured" }, 503);
+        const message = err instanceof Error ? err.message : "download_failed";
+        return json({ error: message }, 500);
+      }
+    }
+
     // All below require Ed25519 auth
     if (!(await sourceAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
 
@@ -512,6 +545,61 @@ function queryKey(request: Request, env: Env): boolean {
   if (!env.WATCH_KEY) return false;
   const got = new URL(request.url).searchParams.get("key") || "";
   return constantTimeEqual(got, env.WATCH_KEY);
+}
+
+async function proxyHlsVariant(
+  env: Env,
+  variantUrl: string,
+  request: Request,
+  title: string,
+  contentType: string
+): Promise<Response> {
+  // Fetch the variant playlist
+  const variantRes = await fetch(variantUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+  if (!variantRes.ok) return json({ error: "variant_fetch_failed" }, 502);
+  const variantText = await variantRes.text();
+
+  // Parse segment URLs
+  const baseUrl = variantUrl.substring(0, variantUrl.lastIndexOf("/") + 1);
+  const segmentUrls = variantText
+    .split("\n")
+    .map(l => l.trim())
+    .filter(l => l && !l.startsWith("#"))
+    .map(l => l.startsWith("http") ? l : new URL(l, baseUrl).href);
+
+  if (segmentUrls.length === 0) return json({ error: "no_segments" }, 500);
+
+  // Stream segments concatenated as raw MPEG-TS (single file stream)
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      for (const segUrl of segmentUrls) {
+        try {
+          const segRes = await fetch(segUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(15000) });
+          if (!segRes.ok || !segRes.body) continue;
+          const reader = segRes.body.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+          }
+        } catch {
+          // Skip failed segment, continue
+        }
+      }
+      controller.close();
+    }
+  });
+
+  const safeTitle = title.replace(/[^a-z0-9]/gi, "_").slice(0, 100);
+  return new Response(stream, {
+    headers: {
+      "content-type": contentType,
+      "content-disposition": `attachment; filename="${safeTitle}.ts"`,
+      "cache-control": "private, no-store",
+      "accept-ranges": "none",
+    },
+  });
 }
 
 function json(data: unknown, status = 200, extra?: HeadersInit): Response {
