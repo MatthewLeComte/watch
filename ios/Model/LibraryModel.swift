@@ -26,6 +26,7 @@ final class LibraryModel {
     /// Set by onOpenURL (share sheet / document types). LibraryView routes
     /// it into the dedicated import page.
     var openImport: URL?
+    var focusID: String?
     var openImportScoped = false
     var downloading: [String: Double] = [:]
     var serverText: String
@@ -48,6 +49,12 @@ final class LibraryModel {
            let saved = try? JSONDecoder().decode([String: Double].self, from: data) {
             positions = saved
         }
+    }
+
+    /// Same TMDB id the search result already carries. Nothing else.
+    func movie(matching result: SourceSearchResult) -> Movie? {
+        guard let tmdb = result.tmdbId else { return nil }
+        return movies.first { $0.tmdbId == tmdb }
     }
 
     var api: WatchAPI {
@@ -101,13 +108,16 @@ final class LibraryModel {
     func cachePosters() async {
         await withTaskGroup(of: Void.self) { group in
             for movie in movies {
-                group.addTask { [self] in _ = await media.posterFile(api: api, id: movie.id) }
+                group.addTask { [self] in
+                    _ = await media.posterFile(api: api, id: movie.id, knownURL: URL(string: movie.posterUrl ?? ""))
+                }
             }
         }
     }
 
     func posterURL(for id: String) async -> URL? {
-        await media.posterFile(api: api, id: id)
+        let known = movies.first { $0.id == id }.flatMap { URL(string: $0.posterUrl ?? "") }
+        return await media.posterFile(api: api, id: id, knownURL: known)
     }
 
     func remember(position: Double, for id: String) {
@@ -244,6 +254,10 @@ final class LibraryModel {
         }
     }
 
+    func cachePlaylists() async {
+        await media.cachePlaylists(api: api, movies: movies)
+    }
+
     func download(_ movie: Movie) {
         if downloads[movie.id] != nil { return }
         if (fractions[movie.id] ?? 0) >= 0.999 { return }
@@ -267,6 +281,14 @@ final class LibraryModel {
             }
             downloads[movie.id] = nil
         }
+    }
+
+    func clearDownload(_ movie: Movie) async {
+        downloads[movie.id]?.cancel()
+        downloads[movie.id] = nil
+        downloading[movie.id] = nil
+        try? await media.removePlayback(id: movie.id)
+        fractions[movie.id] = 0
     }
 
     func removeLocal(_ movie: Movie) async {

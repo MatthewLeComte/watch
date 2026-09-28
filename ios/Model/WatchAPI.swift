@@ -47,6 +47,16 @@ struct WatchAPI: Sendable {
         return try JSONDecoder().decode([SourceSearchResult].self, from: data)
     }
 
+    func tvSeasons(tmdbId: Int) async throws -> [TVSeason] {
+        let data = try await send(path: "v1/sources/tv/\(tmdbId)", method: "GET")
+        return try JSONDecoder().decode(TVSeasonList.self, from: data).seasons
+    }
+
+    func tvEpisodes(tmdbId: Int, season: Int) async throws -> [TVEpisode] {
+        let data = try await send(path: "v1/sources/tv/\(tmdbId)/season/\(season)", method: "GET")
+        return try JSONDecoder().decode(TVEpisodeList.self, from: data).episodes
+    }
+
     /// Resolve a source item to stream info (master playlist, qualities, subtitles).
     func sourceResolve(source: String, id: String) async throws -> SourceStreamInfo {
         let data = try await send(path: "v1/sources/\(source)/resolve/\(id)", method: "GET")
@@ -248,6 +258,22 @@ struct SourceInfo: Codable, Hashable, Sendable, Identifiable {
 }
 
 // MARK: - 67movies Types
+
+struct TVSeason: Identifiable, Hashable, Codable, Sendable {
+    var number: Int
+    var name: String
+    var episodeCount: Int
+    var id: Int { number }
+}
+
+struct TVEpisode: Identifiable, Hashable, Codable, Sendable {
+    var number: Int
+    var name: String
+    var id: Int { number }
+}
+
+private struct TVSeasonList: Codable { var seasons: [TVSeason] }
+private struct TVEpisodeList: Codable { var episodes: [TVEpisode] }
 
 struct SourceSearchResult: Codable, Hashable, Sendable, Identifiable {
     var id: String

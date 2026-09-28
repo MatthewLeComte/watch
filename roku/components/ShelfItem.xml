@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="ShelfItem" extends="Group" init="InitShelfItem">
+  <children>
+    <Poster
+      id="poster"
+      width="280"
+      height="420"
+      loadDisplayMode="scaleToFit"
+    />
+    <Rectangle
+      id="focusRing"
+      width="288"
+      height="428"
+      translation="[-4, -4]"
+      color="0xE5091400"
+    />
+    <Rectangle
+      id="focusBorder"
+      width="288"
+      height="428"
+      translation="[-4, -4]"
+      color="0xE50914FF"
+    >
+      <Rectangle
+        width="280"
+        height="420"
+        translation="[4, 4]"
+        color="0x0E0E1000"
+      />
+    </Rectangle>
+    <Group
+      id="progressOverlay"
+      visible="false"
+      translation="[0, 380]"
+    >
+      <Rectangle width="280" height="6" color="0x00000080" />
+      <Rectangle id="progressBar" width="0" height="6" color="0xE50914FF" />
+    </Group>
+  </children>
+  <interface>
+    <field id="itemContent" type="node" onChange="OnContentChange" />
+    <field id="itemHasFocus" type="boolean" onChange="OnFocusChange" />
+    <field id="progress" type="float" onChange="OnProgressChange" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/ShelfItem.brs" />
+</component>

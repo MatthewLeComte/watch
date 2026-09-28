@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="ShelfTitle" extends="Group">
+  <children>
+    <Label
+      id="title"
+      width="1880"
+      height="60"
+      font="font:LargeBoldSystemFont"
+      color="0xFFFFFFFF"
+      vertAlign="center"
+    />
+  </children>
+  <script type="text/brightscript" uri="pkg:/components/ShelfTitle.brs" />
+</component>

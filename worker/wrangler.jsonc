@@ -15,8 +15,16 @@
     { "pattern": "watch.cornerstonecoatings.com", "custom_domain": true }
   ],
   "vars": {
-    "WATCH_KEY": "a68596aee3429a00eea168ccc408af7f00235119bfce7e07152f92013cecc164"
+    "WATCH_KEY": "a68596aee3429a00eea168ccc408af7f00235119bfce7e07152f92013cecc164",
+    "RIVESTREAM_PROXY": ""
   },
+  "kv_namespaces": [
+    {
+      "binding": "RIVESTREAM_SESSION",
+      "id": "rivestream-session-prod",
+      "preview_id": "rivestream-session-dev"
+    }
+  ],
   "stream": { "binding": "STREAM" },
   "secrets_store_secrets": [
     {

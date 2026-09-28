@@ -1,8 +1,12 @@
 /** RiveStream source: TMDB search → TMDB ID → RiveStream URL → Headless browser → HLS. */
 
+import puppeteer from "@cloudflare/puppeteer";
 import type { Env } from "../env";
 import { Source, type SearchResult, type StreamInfo, type Quality, type SubtitleTrack } from "./index";
 import { parseReleaseName } from "../lib";
+import { StealthBrowser, humanWait, tryClickPlay } from "./rivestream-browser";
+import { getSession, saveSession, extractSessionFromPage, formatCookiesForPlayback, applySessionToPage, RiveStreamSession } from "./rivestream-session";
+import type { KVNamespace } from "@cloudflare/workers-types";
 
 const BASE = "https://www.rivestream.app";
 const TMDB_BASE = "https://api.themoviedb.org/3";
@@ -114,7 +118,7 @@ export const sourceRiveStream: Source = {
 
     const pageUrl = buildRiveStreamUrl(tmdbId, mediaType, mediaType === "tv" ? 1 : undefined, mediaType === "tv" ? 1 : undefined);
 
-    const browserResult = await extractHlsFromRiveStream(env, pageUrl);
+    const browserResult = await extractHlsFromRiveStream(env, pageUrl, tmdbId, mediaType);
     if (!browserResult) return null;
 
     return {
@@ -126,6 +130,8 @@ export const sourceRiveStream: Source = {
       hlsUrl: browserResult.hlsUrl,
       qualities: browserResult.qualities,
       subtitles: browserResult.subtitles,
+      // Pass cookies for Roku playback
+      cookieHeader: browserResult.cookieHeader,
     };
   },
 
@@ -140,7 +146,7 @@ export const sourceRiveStream: Source = {
 
     const masterText = await hlsRes.text();
     const { qualities, subtitles } = parseMasterPlaylist(masterText, stream.hlsUrl);
-    const selectedQuality = qualities.find(q => q.height === quality.height) || qualities[0];
+    const selectedQuality = qualities.find(q => q.height === quality.height) || bestQuality(qualities);
     if (!selectedQuality) throw new Error("no_quality");
 
     const baseUrl = stream.hlsUrl.substring(0, stream.hlsUrl.lastIndexOf("/") + 1);
@@ -238,7 +244,15 @@ function parseMasterPlaylist(text: string, masterUrl: string): { qualities: Qual
       }
     }
   }
+  qualities.sort((a, b) => b.height - a.height || b.bandwidth - a.bandwidth);
   return { qualities, subtitles };
+}
+
+function bestQuality(qualities: Quality[]): Quality | undefined {
+  return qualities.reduce<Quality | undefined>((best, q) => {
+    if (!best || q.height > best.height || (q.height === best.height && q.bandwidth > best.bandwidth)) return q;
+    return best;
+  }, undefined);
 }
 
 function parseStreamInf(line: string): Partial<Quality> {
@@ -271,6 +285,25 @@ function parseMedia(line: string, masterUrl: string): SubtitleTrack | null {
   };
 }
 
+async function bestMasterUrl(urls: string[]): Promise<string | null> {
+  let best: { url: string; height: number; bandwidth: number } | null = null;
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const text = await res.text();
+      const { qualities } = parseMasterPlaylist(text, url);
+      const top = bestQuality(qualities);
+      const height = top?.height ?? 0;
+      const bandwidth = top?.bandwidth ?? 0;
+      if (!best || height > best.height || (height === best.height && bandwidth > best.bandwidth)) {
+        best = { url, height, bandwidth };
+      }
+    } catch { /* try the next playlist */ }
+  }
+  return best?.url ?? urls[0] ?? null;
+}
+
 function parseMediaPlaylist(text: string, baseUrl: string): string[] {
   return text.split("\n")
     .map(l => l.trim())
@@ -278,90 +311,136 @@ function parseMediaPlaylist(text: string, baseUrl: string): string[] {
     .map(l => l.startsWith("http") ? l : new URL(l, baseUrl).href);
 }
 
-async function extractHlsFromRiveStream(env: Env, pageUrl: string): Promise<{
+export async function extractHlsFromRiveStream(
+  env: Env,
+  pageUrl: string,
+  tmdbId: number,
+  mediaType: "movie" | "tv"
+): Promise<{
   hlsUrl: string;
   qualities: Quality[];
   subtitles: SubtitleTrack[];
   title: string;
   year: number | null;
   poster: string | null;
+  cookieHeader: string;
 } | null> {
-  const browser = env.BROWSER;
-  if (!browser) {
-    console.log("Browser Rendering not available in env.BROWSER");
+  if (!env.BROWSER) {
+    console.log(JSON.stringify({ event: "rivestream_error", reason: "no_browser_binding" }));
     return null;
   }
 
+  const proxy = env.RIVESTREAM_PROXY || undefined;
+  const stealthBrowser = new StealthBrowser({ proxy });
+  let session: RiveStreamSession | null = null;
+
   try {
-    const page = await browser.newPage();
-    
-    await page.setRequestInterception(true);
-    page.on('request', (req: any) => {
-      const resourceType = req.resourceType();
-      if (['image', 'stylesheet', 'font'].includes(resourceType)) {
-        req.abort();
-      } else {
-        req.continue();
-      }
-    });
-
-    await page.goto(pageUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-
-    await page.waitForSelector('#nonEmbedSourcesIndex, .serverSelect, [aria-label="Select Direct Server"]', { timeout: 15000 }).catch(() => {});
-
-    const result = await page.evaluate(() => {
-      const nextData = document.getElementById('__NEXT_DATA__');
-      if (nextData) {
-        try {
-          const data = JSON.parse(nextData.textContent || '{}');
-          const pageProps = data.props?.pageProps;
-          
-          const sources = pageProps?.sources || pageProps?.servers || pageProps?.streams;
-          if (sources) {
-            return { sources, pageProps };
-          }
-        } catch { /* ignore */ }
-      }
-
-      const m3u8Matches = document.body.innerHTML.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/g);
-      
-      const scripts = document.querySelectorAll('script');
-      let playerConfig = null;
-      for (const script of scripts) {
-        const text = script.textContent || '';
-        if (text.includes('playerConfig') || text.includes('sources') || text.includes('servers')) {
-          const match = text.match(/(?:playerConfig|sources|servers)\s*[=:]\s*(\[[\s\S]*?\])/);
-          if (match) {
-            try { playerConfig = JSON.parse(match[1].replace(/'/g, '"')); } catch {}
-          }
-        }
-      }
-
-      return { m3u8: m3u8Matches, playerConfig };
-    });
-
-    await page.close();
-
-    let hlsUrl: string | null = null;
-    let title = "";
-    let poster: string | null = null;
-
-    if (result?.m3u8?.length) {
-      hlsUrl = result.m3u8[0];
-    } else if (result?.playerConfig?.sources) {
-      const hlsSource = result.playerConfig.sources.find((s: any) => s.file?.includes('.m3u8') || s.type === 'application/x-mpegURL');
-      hlsUrl = hlsSource?.file;
-    } else if (result?.sources) {
-      const hlsSource = result.sources.find((s: any) => s.file?.includes('.m3u8') || s.url?.includes('.m3u8') || s.type === 'application/x-mpegURL');
-      hlsUrl = hlsSource?.file || hlsSource?.url;
+    // Try to load existing session
+    if (env.RIVESTREAM_SESSION) {
+      session = await getSession(env.RIVESTREAM_SESSION as KVNamespace, tmdbId, mediaType);
     }
 
-    if (!hlsUrl) return null;
+    const browser = await stealthBrowser.launch({ BROWSER: env.BROWSER });
+    const page = await stealthBrowser.newPage();
+
+    // Apply session if exists
+    if (session) {
+      await applySessionToPage(page, session);
+    }
+
+    const playlists = new Set<string>();
+    const interesting: string[] = [];
+
+    // Listen to all frames for responses (catches iframes)
+    const handleResponse = (res: any) => {
+      const url = res.url().split("#")[0]!;
+      const type = (res.headers()["content-type"] || "").toLowerCase();
+      if (url.includes(".m3u8") || type.includes("mpegurl")) {
+        playlists.add(url);
+      }
+      const skip = /fonts\.|gstatic|googletagmanager|cloudflareinsights|tmdb\.org|wtfismyip|_next\/|speculation|\.css(\?|$)/.test(url);
+      if (!skip && interesting.length < 20) interesting.push(url.slice(0, 160));
+    };
+
+    page.on("response", handleResponse);
+    page.on("framecreated", (frame: any) => {
+      frame.on("response", handleResponse);
+    });
+
+    // Listen for WebSocket messages (some sites signal via WS)
+    page.on("websocket", (ws: any) => {
+      ws.on("framereceived", ({ payload }: any) => {
+        if (payload.includes(".m3u8") || payload.includes("mpegurl")) {
+          try {
+            const urls = payload.match(/https?:\/\/[^\s"']+\.m3u8[^\s"']*/g) || [];
+            urls.forEach((u: string) => playlists.add(u));
+          } catch {}
+        }
+      });
+    });
+
+    // Navigate with human-like timing
+    await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+    await humanWait(1000, 2500); // Think time
+
+    // Check for challenge page
+    const isChallenge = await page.evaluate(() => {
+      const text = document.body.innerText.toLowerCase();
+      return text.includes("checking your browser") ||
+             text.includes("challenge") ||
+             text.includes("turnstile") ||
+             text.includes("verify you are human") ||
+             document.querySelector("[data-ray]") !== null;
+    });
+
+    if (isChallenge) {
+      console.log(JSON.stringify({ event: "rivestream_challenge", tmdbId, mediaType, url: pageUrl }));
+      // Wait longer for challenge to potentially auto-solve
+      await humanWait(5000, 8000);
+    }
+
+    // Scroll a bit (human behavior)
+    await page.evaluate(() => window.scrollBy(0, 300));
+    await humanWait(500, 1000);
+
+    // Try to click play
+    await tryClickPlay(page);
+
+    // Wait for playlist with deadline
+    const deadline = Date.now() + 15000; // 15s max wait
+    while (playlists.size === 0 && Date.now() < deadline) {
+      await humanWait(400, 800);
+    }
+
+    const hlsUrl = await bestMasterUrl([...playlists]);
+    if (!hlsUrl) {
+      const title = await page.title().catch(() => "");
+      console.log(JSON.stringify({
+        event: "rivestream_no_playlist",
+        tmdbId,
+        mediaType,
+        title,
+        interesting: interesting.slice(0, 10)
+      }));
+      throw new Error("no_playlist");
+    }
+
+    // Extract updated session before closing
+    let cookieHeader = "";
+    if (env.RIVESTREAM_SESSION) {
+      const newSession = await extractSessionFromPage(page, tmdbId, mediaType);
+      await saveSession(env.RIVESTREAM_SESSION as KVNamespace, newSession);
+      cookieHeader = formatCookiesForPlayback(newSession);
+    }
+
+    await page.close();
 
     const masterRes = await fetch(hlsUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
     if (!masterRes.ok) return null;
     const masterText = await masterRes.text();
     const { qualities, subtitles } = parseMasterPlaylist(masterText, hlsUrl);
+
+    console.log(JSON.stringify({ event: "rivestream_success", tmdbId, mediaType, hlsUrl, qualities: qualities.length, subtitles: subtitles.length }));
 
     return {
       hlsUrl,
@@ -370,9 +449,13 @@ async function extractHlsFromRiveStream(env: Env, pageUrl: string): Promise<{
       title: "",
       year: null,
       poster: null,
+      cookieHeader,
     };
   } catch (err) {
-    console.log("RiveStream browser rendering error:", err);
-    return null;
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(JSON.stringify({ event: "rivestream_error", tmdbId, mediaType, error: message.slice(0, 300) }));
+    throw new Error(message.slice(0, 300));
+  } finally {
+    await stealthBrowser.close();
   }
 }

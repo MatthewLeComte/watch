@@ -22,6 +22,8 @@ struct Movie: Codable, Hashable, Identifiable, Sendable {
     var runtimeMin: Int?
     var genres: [String]
     var imdbId: String?
+    /// TMDB movie id. Same number a search result uses in `meta:{id}`.
+    var tmdbId: Int?
     var osHash: String?
     var streamId: String?
     var hlsUrl: String?

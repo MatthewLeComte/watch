@@ -12,6 +12,21 @@ enum Cinema {
     static let playColumn: CGFloat = 420
 }
 
+struct SaveRing: View {
+    var progress: Double?
+    var body: some View {
+        if let progress {
+            Capsule(style: .continuous)
+                .trim(from: 0, to: max(0.02, progress))
+                .stroke(Color.blue, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(180))
+                .padding(1)
+                .allowsHitTesting(false)
+                .animation(.linear(duration: 0.25), value: progress)
+        }
+    }
+}
+
 struct PosterImage: View {
     var url: URL?
     var title: String
@@ -26,15 +41,34 @@ struct PosterImage: View {
                     if let image = phase.image {
                         image.resizable().scaledToFill()
                     } else {
-                        posterFallback(title)
+                        PosterPlaceholder()
                     }
                 }
             } else if let url, url.isFileURL {
-                posterFallback(title)
+                PosterPlaceholder()
                     .task { localImage = await loadLocalImage(url) }
             } else {
-                posterFallback(title)
+                PosterPlaceholder()
             }
+        }
+        .accessibilityLabel(title)
+    }
+}
+
+/// Grey sweep while a poster is still loading.
+private struct PosterPlaceholder: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.2) / 1.2
+            LinearGradient(
+                stops: [
+                    .init(color: Color(white: 0.16), location: 0),
+                    .init(color: Color(white: 0.28), location: phase),
+                    .init(color: Color(white: 0.16), location: 1)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
         }
     }
 }
@@ -46,17 +80,6 @@ private func loadLocalImage(_ url: URL) async -> Image? {
         else { return nil }
         return Image(decorative: image, scale: 1)
     }.value
-}
-
-private func posterFallback(_ title: String) -> some View {
-    ZStack {
-        LinearGradient(colors: [Color(white: 0.16), .black], startPoint: .top, endPoint: .bottom)
-        Text(title)
-            .font(.title.weight(.heavy))
-            .foregroundStyle(.white)
-            .multilineTextAlignment(.center)
-            .padding(16)
-    }
 }
 
 func byteText(_ bytes: Int64) -> String {

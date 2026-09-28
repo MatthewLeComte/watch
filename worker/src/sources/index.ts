@@ -23,6 +23,7 @@ export type StreamInfo = {
   hlsUrl: string;
   qualities: Quality[];
   subtitles: SubtitleTrack[];
+  cookieHeader?: string; // For Roku Video node HttpHeaders
 };
 
 export type Quality = {
@@ -46,6 +47,8 @@ export interface Source {
   searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null>;
   resolve(env: Env, id: string): Promise<StreamInfo | null>;
   downloadAndIngest(env: Env, stream: StreamInfo, quality: Quality, subtitle?: SubtitleTrack): Promise<string>;
+  seasons?(env: Env, tmdbId: number): Promise<{ number: number; name: string; episodeCount: number }[]>;
+  episodes?(env: Env, tmdbId: number, season: number): Promise<{ number: number; name: string }[]>;
 }
 
 export const SOURCES: Map<string, Source> = new Map();

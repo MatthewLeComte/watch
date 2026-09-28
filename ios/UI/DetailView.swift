@@ -53,11 +53,6 @@ struct DetailView: View {
                             Text(movie.overview)
                                 .foregroundStyle(Cinema.ink.opacity(0.9))
                         }
-                        if movie.matchSource != "manual", !movie.matchNote.isEmpty {
-                            Text(movie.matchNote)
-                                .font(.footnote)
-                                .foregroundStyle(Cinema.mute)
-                        }
                         HStack(spacing: 12) {
                             Button {
                                 playMovie = movie
@@ -65,16 +60,17 @@ struct DetailView: View {
                                 Label("Play", systemImage: "play.fill")
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.white)
-                            .foregroundStyle(.black)
+                            .buttonStyle(.glassProminent)
+                            .controlSize(.large)
                             Button {
                                 library.download(movie)
                             } label: {
-                                Label(downloadLabel(movie), systemImage: "arrow.down")
+                                Label(downloadLabel(movie), systemImage: (library.fractions[movie.id] ?? 0) >= 0.999 ? "checkmark" : "arrow.down")
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
+                            .controlSize(.large)
+                            .overlay { SaveRing(progress: library.downloading[movie.id]) }
                             .disabled((library.fractions[movie.id] ?? 0) >= 0.999)
                         }
                         if let progress = library.downloading[movie.id] {
@@ -136,7 +132,7 @@ struct DetailView: View {
     }
 
     private func downloadLabel(_ movie: Movie) -> String {
-        if (library.fractions[movie.id] ?? 0) >= 0.999 { return "On this device" }
+        if (library.fractions[movie.id] ?? 0) >= 0.999 { return "Downloaded" }
         if library.downloading[movie.id] != nil { return "Saving" }
         return "Download"
     }

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="HomeGridView" extends="Group">
+  <interface>
+    <field id="selectedItem" type="node" />
+    <field id="selectIndex" type="integer" />
+    <field id="reloadIndex" type="integer" />
+    <field id="hasError" type="bool" />
+  </interface>
+  <children>
+    <Rectangle width="1920" height="1080" color="0x0E0E10FF" />
+    <MarkupGrid
+      id="grid"
+      translation="[0, 0]"
+      itemComponentName="ShelfItem"
+      itemSize="[280, 420]"
+      itemSpacing="[24, 24]"
+      numColumns="5"
+      rowItemSize="[280, 420]"
+      rowItemSpacing="[24, 24]"
+      showSectionLabels="true"
+      sectionLabelComponentName="ShelfTitle"
+      sectionLabelOffset="[20, 0]"
+      sectionLabelSize="[1880, 60]"
+    >
+      <Header>
+        <HomeHeader id="homeHeader" />
+      </Header>
+    </MarkupGrid>
+    <Rectangle
+      id="loading"
+      width="1920"
+      height="1080"
+      color="0x0E0E10FF"
+    >
+      <Label
+        translation="[860, 520]"
+        font="font:MediumSystemFont"
+        text="Loading..."
+        color="0xFFFFFFFF"
+        horizAlign="center"
+      />
+    </Rectangle>
+    <Rectangle
+      id="errorBox"
+      width="1920"
+      height="1080"
+      color="0x0E0E10FF"
+      visible="false"
+    >
+      <Label
+        id="errorLabel"
+        translation="[460, 480]"
+        width="1000"
+        font="font:MediumSystemFont"
+        text=""
+        color="0xFFFFFFFF"
+        horizAlign="center"
+        wrap="true"
+      />
+      <Button
+        id="retryBtn"
+        translation="[800, 620]"
+        width="320"
+        height="60"
+        text="Retry"
+      />
+    </Rectangle>
+  </children>
+  <script type="text/brightscript" uri="pkg:/components/HomeGridView.brs" />
+</component>

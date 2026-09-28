@@ -87,7 +87,8 @@ export const sourceHeadless: Source = {
 
     const masterText = await hlsRes.text();
     const { qualities, subtitles } = parseMasterPlaylist(masterText, stream.hlsUrl);
-    const selectedQuality = qualities.find(q => q.height === quality.height) || qualities[0];
+    const selectedQuality = qualities.find(q => q.height === quality.height)
+      || qualities.reduce<Quality | undefined>((best, q) => (!best || q.height > best.height || (q.height === best.height && q.bandwidth > best.bandwidth) ? q : best), undefined);
     if (!selectedQuality) throw new Error("no_quality");
 
     const baseUrl = stream.hlsUrl.substring(0, stream.hlsUrl.lastIndexOf("/") + 1);
@@ -318,6 +319,7 @@ function parseMasterPlaylist(text: string, masterUrl: string): { qualities: Qual
       }
     }
   }
+  qualities.sort((a, b) => b.height - a.height || b.bandwidth - a.bandwidth);
   return { qualities, subtitles };
 }
 

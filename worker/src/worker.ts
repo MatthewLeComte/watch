@@ -43,6 +43,7 @@ type MovieRow = {
   match_source: string;
   match_p: number | null;
   match_note: string;
+  tmdb_id: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -86,6 +87,11 @@ export default {
     if (hlsSeg && request.method === "GET") {
       if (!(await streamAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
       return hlsSegment(env, hlsSeg[1]!, Number(hlsSeg[2]));
+    }
+    const trick = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/trick\.bif$/i);
+    if (trick && request.method === "GET") {
+      if (!(await streamAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
+      return trickBif(env, trick[1]!);
     }
     const publicMedia = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/media$/i);
     if (publicMedia && (request.method === "GET" || request.method === "HEAD")) {
@@ -133,6 +139,29 @@ export default {
       return json(listSources().map(s => ({ key: s.key, name: s.name })));
     }
 
+    const tvMatch = path.match(/^\/(?:api|v1)\/sources\/tv\/(\d+)(?:\/season\/(\d+))?\/?$/i);
+    if (tvMatch && request.method === "GET") {
+      const tmdbId = Number(tvMatch[1]);
+      const season = tvMatch[2] ? Number(tvMatch[2]) : null;
+      const cacheKey = new Request(`https://watch.cornerstonecoatings.com/v1/sources/tv/${tmdbId}${season == null ? "" : `/season/${season}`}`);
+      const cached = await caches.default.match(cacheKey);
+      if (cached) return cached;
+      try {
+        const meta = SOURCES.get("meta");
+        const body = season == null
+          ? { seasons: await meta?.seasons?.(env, tmdbId) ?? [] }
+          : { episodes: await meta?.episodes?.(env, tmdbId, season) ?? [] };
+        const response = json(body);
+        response.headers.set("cache-control", "public, max-age=3600");
+        await caches.default.put(cacheKey, response.clone());
+        return response;
+      } catch (err) {
+        if (err instanceof TmdbUnconfigured) return json({ error: "tmdb_unconfigured" }, 503);
+        const message = err instanceof Error ? err.message : "search_failed";
+        return json({ error: message }, 502);
+      }
+    }
+
     // GET /v1/sources/search?q=elf — TMDB title search. The app calls this path.
     const searchMatch = path.match(/^\/(?:api|v1)\/sources\/search\/?$/i);
     if (searchMatch && request.method === "GET") {
@@ -148,7 +177,14 @@ export default {
           return json(result ? [result] : []);
         }
         if (!q) return json({ error: "query_required" }, 400);
-        return json(await source.search(q, env));
+        const normalized = q.trim().toLowerCase();
+        const cacheKey = new Request(`https://watch.cornerstonecoatings.com/v1/sources/search?q=${encodeURIComponent(normalized)}&source=${sourceKey}`);
+        const cached = await caches.default.match(cacheKey);
+        if (cached) return cached;
+        const response = json(await source.search(q, env));
+        response.headers.set("cache-control", "public, max-age=300");
+        await caches.default.put(cacheKey, response.clone());
+        return response;
       } catch (err) {
         if (err instanceof TmdbUnconfigured) return json({ error: "tmdb_unconfigured" }, 503);
         const message = err instanceof Error ? err.message : "search_failed";
@@ -236,6 +272,8 @@ async function streamAuthorized(request: Request, env: Env): Promise<boolean> {
 }
 
 const hlsPlans = new Map<string, ReturnType<typeof planSegments>>();
+const hlsPlanOrder: string[] = [];
+const hlsPlanFlight = new Map<string, Promise<ReturnType<typeof planSegments> | null>>();
 
 async function moviePrefix(env: Env, id: string): Promise<Uint8Array | null> {
   const head = await rangedGet(env, id, 0, 65536);
@@ -253,34 +291,76 @@ async function moviePrefix(env: Env, id: string): Promise<Uint8Array | null> {
   return new Uint8Array(await full.arrayBuffer());
 }
 
+function rememberPlans(id: string, plans: ReturnType<typeof planSegments>) {
+  const existing = hlsPlanOrder.indexOf(id);
+  if (existing >= 0) hlsPlanOrder.splice(existing, 1);
+  hlsPlanOrder.push(id);
+  hlsPlans.set(id, plans);
+  while (hlsPlanOrder.length > 24) {
+    const old = hlsPlanOrder.shift();
+    if (old) hlsPlans.delete(old);
+  }
+}
+
 async function plansFor(env: Env, id: string) {
   const hit = hlsPlans.get(id);
-  if (hit) return hit;
-  const prefix = await moviePrefix(env, id);
-  if (!prefix) return null;
-  const plans = planSegments(prefix);
-  if (plans.length === 0) return null;
-  if (hlsPlans.size > 4) hlsPlans.clear();
-  hlsPlans.set(id, plans);
-  return plans;
+  if (hit) {
+    rememberPlans(id, hit);
+    return hit;
+  }
+  const flight = hlsPlanFlight.get(id);
+  if (flight) return flight;
+  const pending = (async () => {
+    const prefix = await moviePrefix(env, id);
+    if (!prefix) return null;
+    const plans = planSegments(prefix);
+    if (plans.length === 0) return null;
+    rememberPlans(id, plans);
+    return plans;
+  })();
+  hlsPlanFlight.set(id, pending);
+  try {
+    return await pending;
+  } finally {
+    hlsPlanFlight.delete(id);
+  }
 }
 
 async function hlsIndex(request: Request, env: Env, id: string): Promise<Response> {
-  const plans = await plansFor(env, id);
-  if (!plans) return json({ error: "not_playable" }, 404);
   const url = new URL(request.url);
   const key = url.searchParams.get("key");
   const q = key ? `?key=${encodeURIComponent(key)}` : "";
+  const cacheKey = new Request(`https://watch.internal/hls/${id}/index.m3u8${q}`);
+  const cached = await caches.default.match(cacheKey);
+  if (cached) {
+    return new Response(cached.body, {
+      headers: {
+        "content-type": "application/vnd.apple.mpegurl",
+        "cache-control": "public, max-age=86400",
+      },
+    });
+  }
+  const plans = await plansFor(env, id);
+  if (!plans) return json({ error: "not_playable" }, 404);
   const body = playlist(plans, (n) => `${url.origin}/v1/items/${id}/seg/${n}.ts${q}`);
-  return new Response(body, {
+  const response = new Response(body, {
     headers: {
       "content-type": "application/vnd.apple.mpegurl",
-      "cache-control": "private, max-age=60",
+      "cache-control": "public, max-age=86400",
     },
   });
+  await caches.default.put(cacheKey, response.clone());
+  return response;
 }
 
 async function hlsSegment(env: Env, id: string, n: number): Promise<Response> {
+  const cacheKey = new Request(`https://watch.internal/hls/${id}/seg/${n}.ts`);
+  const cached = await caches.default.match(cacheKey);
+  if (cached) {
+    return new Response(cached.body, {
+      headers: { "content-type": "video/mp2t", "cache-control": "public, max-age=86400" },
+    });
+  }
   const plans = await plansFor(env, id);
   const plan = plans?.[n];
   if (!plan) return json({ error: "not_found" }, 404);
@@ -290,9 +370,19 @@ async function hlsSegment(env: Env, id: string, n: number): Promise<Response> {
   if (!obj) return json({ error: "missing_object" }, 404);
   const bytes = new Uint8Array(await obj.arrayBuffer());
   const ts = muxSegment(bytes, shiftPlan(plan, span.offset));
-  return new Response(ts, {
+  const response = new Response(ts, {
+    headers: { "content-type": "video/mp2t", "cache-control": "public, max-age=86400" },
+  });
+  await caches.default.put(cacheKey, response.clone());
+  return response;
+}
+
+async function trickBif(env: Env, id: string): Promise<Response> {
+  const obj = await env.watch_bucket.get(`bif/${id}.bif`);
+  if (!obj) return json({ error: "no_bif" }, 404);
+  return new Response(obj.body, {
     headers: {
-      "content-type": "video/mp2t",
+      "content-type": "application/octet-stream",
       "cache-control": "public, max-age=86400",
     },
   });
@@ -514,6 +604,7 @@ async function saveStream(env: Env, id: string, video: StreamVideo, downloadUrl?
 }
 
 export async function listItems(env: Env): Promise<Response> {
+  await ensureTrailerSchema(env);
   const rows = await env.watch.prepare("SELECT * FROM movie ORDER BY created_at DESC").all<MovieRow>();
   const subs = await env.watch.prepare("SELECT movie_id, lang, label, source, release_name, hearing_impaired FROM subtitle").all<
     SubRow & { movie_id: string }
@@ -834,6 +925,7 @@ export async function deleteItem(env: Env, id: string): Promise<Response> {
   await env.watch_bucket.delete([
     `video/${id}`,
     `poster/${id}`,
+    `bif/${id}.bif`,
     ...subs.results.map((s) => s.r2_key),
   ]);
   await env.watch.prepare("DELETE FROM subtitle WHERE movie_id = ?").bind(id).run();
@@ -1073,6 +1165,7 @@ async function ensureTrailerSchema(env: Env): Promise<void> {
     "ALTER TABLE movie ADD COLUMN trailer_status TEXT DEFAULT 'missing'",
     "ALTER TABLE movie ADD COLUMN trailer_note TEXT",
     "ALTER TABLE movie ADD COLUMN trailer_caption_key TEXT",
+    "ALTER TABLE movie ADD COLUMN tmdb_id INTEGER",
   ];
   for (const sql of alters) {
     try {
@@ -1293,6 +1386,7 @@ function toItem(row: MovieRow, subs: SubRow[]) {
     runtimeMin: row.runtime_min,
     genres,
     imdbId: row.imdb_id,
+    tmdbId: row.tmdb_id ?? null,
     osHash: row.os_hash,
     streamId: row.stream_uid,
     hlsUrl: row.hls_url,

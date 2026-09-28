@@ -1,14 +1,72 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 import AVFoundation
 import WebKit
+
+private struct ImportMenuButton: UIViewRepresentable {
+    var onImport: () -> Void
+
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .system)
+        button.setImage(UIImage(systemName: "plus"), for: .normal)
+        button.tintColor = .label
+        button.showsMenuAsPrimaryAction = true
+        button.menu = UIMenu(children: [
+            UIAction(title: "Import File", image: UIImage(systemName: "square.and.arrow.down")) { _ in
+                context.coordinator.fire()
+            }
+        ])
+        return button
+    }
+
+    func updateUIView(_ button: UIButton, context: Context) {
+        context.coordinator.fire = onImport
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(fire: onImport) }
+
+    final class Coordinator {
+        var fire: () -> Void
+        init(fire: @escaping () -> Void) { self.fire = fire }
+    }
+}
+
+private final class VolumeUpUnmute: @unchecked Sendable {
+    var onUp: @Sendable () -> Void = {}
+    private let lock = NSLock()
+    private var watch: NSKeyValueObservation?
+    private var last: Float = -1
+
+    func start() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setActive(true)
+        lock.lock()
+        last = session.outputVolume
+        lock.unlock()
+        watch = session.observe(\.outputVolume, options: [.new]) { [weak self] session, _ in
+            guard let self else { return }
+            self.lock.lock()
+            let now = session.outputVolume
+            let rose = now > self.last + 0.001
+            self.last = now
+            let fire = self.onUp
+            self.lock.unlock()
+            if rose { fire() }
+        }
+    }
+}
 
 struct LibraryView: View {
     @Environment(LibraryModel.self) private var library
     @Environment(\.horizontalSizeClass) private var hSize
     @Environment(\.verticalSizeClass) private var vSize
     @State private var importing = false
-    @State private var showSourceSearch = false
+    @State private var searchQuery = ""
+    @State private var searchPresented = false
+    @State private var searchResults: [SourceSearchResult] = []
+    @State private var searchError: String?
+    @State private var picked: SourceSearchResult?
     @State private var correcting: Movie?
     @State private var pendingImport: URL?
     @State private var pendingScoped = false
@@ -17,7 +75,9 @@ struct LibraryView: View {
     @State private var posters: [String: URL] = [:]
     @State private var playing: Movie?
     @State private var youtubeIDs: [String: String] = [:]
-    @State private var trailerAudible = false
+    @AppStorage("watch.trailerAudible") private var trailerAudible = false
+    @State private var volumeUp = VolumeUpUnmute()
+    @State private var featuredID: String?
 
     private var isCompact: Bool { hSize == .compact }
 
@@ -35,12 +95,34 @@ struct LibraryView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack(alignment: .top) {
-                Color.black.ignoresSafeArea()
-                if library.movies.isEmpty { empty } else { home }
-                if isCompact { controls }
+            ZStack {
+                if library.movies.isEmpty {
+                    empty
+                } else {
+                    home
+                }
+                if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    searchResultsList
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.black)
+                }
             }
-            .toolbar { if !isCompact { controls } }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black.ignoresSafeArea())
+            .searchable(text: $searchQuery, isPresented: $searchPresented, prompt: "Movie or show")
+            .task(id: searchQuery) { await runSearch() }
+            .sheet(item: $picked) { result in
+                RiveCaptureView(library: library, result: result) { picked = nil }
+            }
+            .toolbar {
+                DefaultToolbarItem(kind: .search, placement: .bottomBar)
+                if !searchPresented {
+                    ToolbarSpacer(.flexible, placement: .bottomBar)
+                    ToolbarItem(placement: .bottomBar) {
+                        ImportMenuButton { importing = true }
+                    }
+                }
+            }
             .navigationDestination(for: Movie.self) { DetailView(movieID: $0.id) }
             .sheet(item: $correcting) { CorrectMatchView(movie: $0) }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.mpeg4Movie, .quickTimeMovie, .movie], allowsMultipleSelection: true) { handleImport($0) }
@@ -49,11 +131,16 @@ struct LibraryView: View {
             .onChange(of: library.bulkItems.count) { _, c in if c > 0 { bulkSheetPresented = true } }
             .modifier(FullScreenPlayer(movie: $playing))
             .sensoryFeedback(.impact(weight: .medium), trigger: playing?.id)
-            .refreshable { await library.refresh(); await loadPosters() }
+
             .onChange(of: library.openImport) { if let url = library.openImport { pendingImport = url; pendingScoped = library.openImportScoped; library.openImport = nil } }
             .onChange(of: shelves.map(\.id)) { _, ids in if let id = shelfID, !ids.contains(id) { shelfID = nil } }
             .task { await loadPosters() }
-            .task(id: heroMovie?.id) { trailerAudible = false; await resolveStreamTrailer() }
+            .task(id: library.movies.map(\.id).joined(separator: ",")) { await library.cachePlaylists() }
+            .task(id: heroMovie?.id) { await resolveStreamTrailer() }
+            .onAppear {
+                volumeUp.onUp = { Task { @MainActor in trailerAudible = true } }
+                volumeUp.start()
+            }
         }
         .navigationSplitViewStyle(.balanced)
     }
@@ -72,22 +159,146 @@ struct LibraryView: View {
         return r.filter { !$0.movies.isEmpty }
     }
 
-    /// Hero follows the visible row — trailer never gets lost by scrolling.
     private var heroMovie: Movie? {
-        let idx = shelves.firstIndex { $0.id == shelfID } ?? 0
-        return shelves[safe: idx]?.movies.first ?? library.movies.first
+        if let featuredID, let movie = library.movies.first(where: { $0.id == featuredID }) { return movie }
+        return library.movies.first
     }
 
     private var home: some View {
-        GeometryReader { geo in
-            let heroH: CGFloat = isCompact ? 420 : min(geo.size.height * 0.62, 640)
-            VStack(spacing: 0) {
-                heroCarousel(width: geo.size.width)
-                    .frame(height: heroH)
-                    .clipped()
-                shelfScroll(width: geo.size.width)
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 18) {
+                trailerStage
+                if let movie = heroMovie {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(movie.displayTitle)
+                            .font(.largeTitle.weight(.heavy))
+                            .fontDesign(.serif)
+                            .foregroundStyle(.white)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text([movie.yearText, movie.runtimeText ?? "", movie.genres.prefix(3).joined(separator: " · ")].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 20)
+                    HStack(spacing: 12) {
+                        Button { play(movie) } label: {
+                            Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.glassProminent)
+                        .controlSize(.large)
+                        Button { library.download(movie) } label: {
+                            let saved = (library.fractions[movie.id] ?? 0) >= 0.999
+                            Label(downloadTitle(movie), systemImage: saved ? "checkmark" : "arrow.down").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.glass)
+                        .controlSize(.large)
+                        .disabled((library.fractions[movie.id] ?? 0) >= 0.999)
+                        .overlay { SaveRing(progress: library.downloading[movie.id]) }
+                    }
+                    .padding(.horizontal, 20)
+                    ScrollView {
+                        Text(movie.overview.isEmpty ? " " : movie.overview)
+                            .font(.system(size: 16))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.bottom, 18)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .scrollIndicators(.visible, axes: .vertical)
+                    .padding(.horizontal, 20)
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0),
+                                .init(color: .black, location: 0.45),
+                                .init(color: .clear, location: 0.92)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            posterCarousel
+                .frame(height: 162)
+        }
+        .padding(.top, -40)
+        .padding(.bottom, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var trailerStage: some View {
+        ZStack {
+            Color.black
+            if playing == nil, let url = heroFileURL {
+                HeroTrailer(
+                    url: url,
+                    captionsURL: heroMovie?.trailerCaptions.flatMap(URL.init(string:)),
+                    apiKey: library.api.key,
+                    audible: trailerAudible,
+                    suspended: picked != nil
+                )
+                .id(url.absoluteString)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture { trailerAudible.toggle() }
+            } else if let movie = heroMovie {
+                PosterImage(url: billboardURL(movie), title: movie.displayTitle)
+                    .scaledToFit()
             }
         }
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .frame(maxWidth: .infinity)
+        .fixedSize(horizontal: false, vertical: true)
+        .clipped()
+        .overlay(alignment: .topTrailing) {
+            if heroFileURL != nil, playing == nil {
+                Image(systemName: trailerAudible ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    .font(.body.weight(.semibold))
+                    .padding(10)
+                    .glassEffect(.regular, in: Circle())
+                    .padding(12)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private var posterCarousel: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(spacing: 12) {
+                ForEach(library.movies) { movie in
+                    Button { featuredID = movie.id } label: {
+                        PosterImage(url: posters[movie.id] ?? URL(string: movie.posterUrl ?? movie.thumbnailUrl ?? ""), title: movie.displayTitle)
+                            .frame(width: 108, height: 162)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay {
+                                if movie.id == heroMovie?.id {
+                                    RoundedRectangle(cornerRadius: 10).stroke(.white, lineWidth: 2)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        if (library.fractions[movie.id] ?? 0) > 0 || library.downloading[movie.id] != nil {
+                            Button("Clear Download", systemImage: "trash", role: .destructive) {
+                                Task { await library.clearDownload(movie) }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .vertical)
+    }
+
+    private func downloadTitle(_ movie: Movie) -> String {
+        if (library.fractions[movie.id] ?? 0) >= 0.999 { return "Downloaded" }
+        if library.downloading[movie.id] != nil { return "Saving" }
+        return "Download"
     }
 
     @ViewBuilder private func shelfScroll(width: CGFloat) -> some View {
@@ -133,7 +344,8 @@ struct LibraryView: View {
                     url: url,
                     captionsURL: heroMovie?.trailerCaptions.flatMap(URL.init(string:)),
                     apiKey: library.api.key,
-                    audible: trailerAudible
+                    audible: trailerAudible,
+                    suspended: picked != nil
                 )
                     .id(url.absoluteString)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -264,7 +476,6 @@ struct LibraryView: View {
         HStack { Spacer()
             Menu {
                 Button { importing = true } label: { Label("Import File", systemImage: "square.and.arrow.down") }
-                Button { showSourceSearch = true } label: { Label("Search Source", systemImage: "magnifyingglass") }
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 20, weight: .bold))
@@ -274,7 +485,84 @@ struct LibraryView: View {
             .buttonBorderShape(.circle)
             .accessibilityLabel("Add a movie")
         }.padding(.horizontal, isCompact ? 14 : 24).padding(.top, 6)
-        .sheet(isPresented: $showSourceSearch) { SourceSearchView() }
+    }
+
+    private var topInset: CGFloat {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let window = scenes.flatMap(\.windows).first(where: \.isKeyWindow) ?? scenes.flatMap(\.windows).first
+        return window?.safeAreaInsets.top ?? 59
+    }
+
+    private var searchResultsList: some View {
+        Group {
+            if let searchError, searchResults.isEmpty {
+                ContentUnavailableView(searchError, systemImage: "exclamationmark.triangle")
+            } else {
+                List(searchResults) { result in
+                    Button { open(result) } label: {
+                        HStack(spacing: 14) {
+                            PosterImage(url: result.poster.flatMap(URL.init(string:)), title: result.displayTitle)
+                                .frame(width: 92, height: 138)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(result.displayTitle).font(.headline).foregroundStyle(.white)
+                                if let year = result.year { Text(String(year)).font(.subheadline).foregroundStyle(.white.opacity(0.6)) }
+                                Text(owned(result) == nil ? "Online" : "In your library")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.white.opacity(0.7))
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(Color.black)
+                    .listRowSeparator(.hidden)
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .contentMargins(.top, topInset + 12, for: .scrollContent)
+                .scrollIndicators(.hidden)
+            }
+        }
+    }
+
+    private func owned(_ result: SourceSearchResult) -> Movie? {
+        library.movie(matching: result)
+    }
+
+    private func open(_ result: SourceSearchResult) {
+        if let movie = library.movie(matching: result) {
+            searchQuery = ""
+            searchPresented = false
+            play(movie)
+            return
+        }
+        picked = result
+    }
+
+    private func runSearch() async {
+        let term = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard term.count >= 2 else {
+            searchResults = []
+            searchError = nil
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(120))
+        guard !Task.isCancelled, term == searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        searchError = nil
+        do {
+            let found = if term.hasPrefix("tt"), term.count >= 9 {
+                try await library.sourceSearchByImdb(imdbId: term, source: "meta")
+            } else {
+                try await library.sourceSearch(query: term, source: "meta")
+            }
+            guard !Task.isCancelled else { return }
+            searchResults = found
+        } catch {
+            guard !Task.isCancelled else { return }
+            searchResults = []
+            let message = error.localizedDescription
+            searchError = message.contains("tmdb_unconfigured") ? "TMDB is not configured on the worker." : message
+        }
     }
 
     private var empty: some View {
@@ -290,14 +578,7 @@ struct LibraryView: View {
                         .background(.white, in: RoundedRectangle(cornerRadius: 8))
                         .foregroundStyle(.black)
                 }
-                Button { showSourceSearch = true } label: {
-                    Label("Search Source", systemImage: "magnifyingglass")
-                        .font(.headline.weight(.bold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(Cinema.red, in: RoundedRectangle(cornerRadius: 8))
-                        .foregroundStyle(.white)
-                }
+
             }
             .padding(.horizontal, 40)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black)
@@ -394,6 +675,7 @@ private struct HeroTrailer: View {
     var captionsURL: URL?
     var apiKey: String
     var audible: Bool
+    var suspended: Bool = false
     @State private var player: AVPlayer?
     @State private var ready = false
     @State private var tick: Any?
@@ -402,15 +684,18 @@ private struct HeroTrailer: View {
 
     var body: some View {
         ZStack {
+            Color.black
             if let player {
                 HeroPlayerLayer(player: player)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .opacity(ready ? 1 : 0)
             }
         }
+        .background(Color.black)
         .overlay(alignment: .bottom) {
             if !shown.isEmpty {
                 Text(shown)
-                    .font(.headline.weight(.semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 12)
@@ -423,6 +708,9 @@ private struct HeroTrailer: View {
         .onAppear { start() }
         .onDisappear { stop() }
         .onChange(of: audible) { _, on in applyAudio(on) }
+        .onChange(of: suspended) { _, hold in
+            if hold { player?.pause() } else { player?.play() }
+        }
         .task(id: captionsURL) { await loadCaptions() }
     }
 
@@ -466,7 +754,7 @@ private struct HeroTrailer: View {
         }
         player = next
         applyAudio(audible)
-        next.play()
+        if !suspended { next.play() }
     }
 
     private func applyAudio(_ on: Bool) {

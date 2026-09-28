@@ -1,4 +1,7 @@
 import SwiftUI
+import UIKit
+import WebKit
+import AVKit
 
 /// Search sources and add to library.
 struct SourceSearchView: View {
@@ -10,14 +13,6 @@ struct SourceSearchView: View {
     @State private var searching = false
     @State private var error: String?
     @State private var selected: SourceSearchResult?
-    @State private var showQualityPicker = false
-    @State private var pendingStream: SourceStreamInfo?
-    @State private var pendingQuality: SourceQuality?
-    @State private var pendingSubtitle: SourceSubtitle?
-    @State private var downloading = false
-    @State private var downloadStage = ""
-    @State private var selectedSource = "meta"
-    @State private var availableSources: [SourceInfo] = []
 
     var body: some View {
         NavigationStack {
@@ -25,43 +20,6 @@ struct SourceSearchView: View {
                 Color.black.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    // Source picker
-                    Menu {
-                        ForEach(availableSources) { src in
-                            Button {
-                                selectedSource = src.key
-                            } label: {
-                                HStack {
-                                    Text(src.name)
-                                    if selectedSource == src.key {
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            Image(systemName: "server.rack")
-                            Text(availableSources.first { $0.key == selectedSource }?.name ?? selectedSource)
-                            Image(systemName: "chevron.up.chevron.down")
-                        }
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.white.opacity(0.1), in: Capsule())
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.black)
-
-                    // Search bar
-                    searchBar
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(Color.black)
-
-                    // Results
                     if searching {
                         Spacer()
                         ProgressView()
@@ -98,10 +56,10 @@ struct SourceSearchView: View {
                             Image(systemName: "magnifyingglass.circle")
                                 .font(.system(size: 60))
                                 .foregroundStyle(Cinema.red)
-                            Text("Search \(selectedSource)")
+                            Text("Search")
                                 .font(.title.weight(.bold))
                                 .foregroundStyle(.white)
-                            Text("Type a movie title. The result is its TMDB id.")
+                            Text("A movie or a show.")
                                 .foregroundStyle(.white.opacity(0.6))
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 40)
@@ -121,43 +79,18 @@ struct SourceSearchView: View {
                     }
                 }
             }
-            .navigationTitle("Add from Source")
+            .navigationTitle("Add")
             .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, prompt: "Movie or show")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
             }
             .sheet(item: $selected) { result in
-                SourceResolveView(
-                    library: library,
-                    result: result,
-                    source: selectedSource,
-                    onDownload: { stream, quality, subtitle in
-                        selected = nil
-                        pendingStream = stream
-                        pendingQuality = quality
-                        pendingSubtitle = subtitle
-                        showQualityPicker = true
-                    }
-                )
-            }
-            .sheet(isPresented: $showQualityPicker) {
-                if let stream = pendingStream, let quality = pendingQuality {
-                    SourceDownloadConfirmView(
-                        stream: stream,
-                        quality: quality,
-                        subtitle: pendingSubtitle,
-                        onConfirm: { q, sub in
-                            Task { await doDownload(stream: stream, quality: q, subtitle: sub) }
-                        },
-                        onCancel: { showQualityPicker = false }
-                    )
-                }
-            }
-            .overlay {
-                if downloading {
-                    downloadOverlay
+                RiveCaptureView(library: library, result: result) {
+                    selected = nil
+                    dismiss()
                 }
             }
             .onChange(of: query) { _, new in
@@ -169,39 +102,7 @@ struct SourceSearchView: View {
                     results = []
                 }
             }
-            .task {
-                do {
-                    availableSources = try await library.listSources()
-                    if let first = availableSources.first {
-                        selectedSource = first.key
-                    }
-                } catch {
-                    availableSources = [SourceInfo(key: "meta", name: "TMDB")]
-                    selectedSource = "meta"
-                }
-            }
         }
-    }
-
-    private var searchBar: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.white.opacity(0.5))
-            TextField("Movie title", text: $query)
-                .foregroundStyle(.white)
-                .textInputAutocapitalization(.never)
-                .disableAutocorrection(true)
-                .onSubmit { Task { await doSearch() } }
-            if !query.isEmpty {
-                Button { query = ""; results = [] } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func resultRow(_ result: SourceSearchResult) -> some View {
@@ -223,7 +124,7 @@ struct SourceSearchView: View {
                     EmptyView()
                 }
             }
-            .frame(width: 60, height: 90)
+            .frame(width: 92, height: 138)
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
             // Info
@@ -237,11 +138,9 @@ struct SourceSearchView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.8))
                 }
-                if let imdb = result.imdbId {
-                    Text(imdb)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.5))
-                }
+                Text(libraryMovie(result) == nil ? "Online" : "In your library")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.7))
             }
 
             Spacer()
@@ -251,8 +150,17 @@ struct SourceSearchView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            selected = result
+            if let movie = libraryMovie(result) {
+                library.focusID = movie.id
+                dismiss()
+            } else {
+                selected = result
+            }
         }
+    }
+
+    private func libraryMovie(_ result: SourceSearchResult) -> Movie? {
+        library.movie(matching: result)
     }
 
     private func doSearch(imdb: String? = nil) async {
@@ -260,9 +168,9 @@ struct SourceSearchView: View {
         error = nil
         do {
             if let imdb {
-                results = try await library.sourceSearchByImdb(imdbId: imdb, source: selectedSource)
+                results = try await library.sourceSearchByImdb(imdbId: imdb, source: "meta")
             } else {
-                results = try await library.sourceSearch(query: query, source: selectedSource)
+                results = try await library.sourceSearch(query: query, source: "meta")
             }
         } catch {
             let message = error.localizedDescription
@@ -272,42 +180,436 @@ struct SourceSearchView: View {
         searching = false
     }
 
-    private func doDownload(stream: SourceStreamInfo, quality: SourceQuality, subtitle: SourceSubtitle?) async {
-        downloading = true
-        downloadStage = "Preparing…"
+}
 
-        do {
-            let movie = try await library.sourceDownload(
-                source: selectedSource,
-                stream: stream,
-                qualityHeight: quality.height,
-                subtitleLang: subtitle?.lang
-            )
-            library.adopt(movie)
-            dismiss()
-        } catch {
-            self.error = error.localizedDescription
-            try? await Task.sleep(for: .seconds(3))
-        }
-        downloading = false
+/// The Rive page sorts its servers, then the playlist it requests is handed to
+/// AVAssetDownloadURLSession. That downloader keeps the highest-bandwidth variant.
+struct RiveCaptureView: View {
+    let library: LibraryModel
+    let result: SourceSearchResult
+    let onFinished: () -> Void
+
+    init(library: LibraryModel, result: SourceSearchResult, onFinished: @escaping () -> Void) {
+        self.library = library
+        self.result = result
+        self.onFinished = onFinished
+        let parts = result.id.split(separator: ":")
+        let tv = result.type == "series" || result.id.hasPrefix("meta:tv:")
+        _season = State(initialValue: tv && parts.count > 3 ? Int(parts[3]) ?? 1 : 1)
+        _episode = State(initialValue: tv && parts.count > 4 ? Int(parts[4]) ?? 1 : 1)
     }
 
-    private var downloadOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.85).ignoresSafeArea()
-            VStack(spacing: 20) {
-                ProgressView()
-                    .scaleEffect(1.5)
-                    .tint(.white)
-                Text(downloadStage.isEmpty ? "Downloading & Processing…" : downloadStage)
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                Text("This may take a few minutes")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.6))
+    @Environment(\.dismiss) private var dismiss
+    @State private var playlist: URL?
+    @State private var native = false
+    @State private var bufferMovie: Movie?
+    @State private var bufferTask: Task<URL?, Never>?
+    @State private var localPlay: URL?
+    @State private var bufferProgress: Double = 0
+    @State private var season = 1
+    @State private var episode = 1
+
+    private var isTV: Bool { result.type == "series" || result.id.hasPrefix("meta:tv:") }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                if let url = pageURL() {
+                    RiveWebView(url: url) { found in
+                        guard playlist == nil else { return }
+                        playlist = found
+                        startBuffer()
+                        native = true
+                    }
+                    .id("\(season)-\(episode)")
+                    .opacity(0)
+                    .allowsHitTesting(false)
+                    .ignoresSafeArea(edges: .bottom)
+                } else {
+                    ContentUnavailableView("No TMDB id", systemImage: "film", description: Text(result.title))
+                }
+                if playlist == nil {
+                    ProgressView("Finding the stream")
+                        .tint(.white)
+                        .foregroundStyle(.white)
+                }
             }
-            .padding(32)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .background(Color.black)
+            .navigationTitle(result.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        startBuffer()
+                    } label: {
+                        if bufferTask != nil, localPlay == nil {
+                            Text(bufferProgress > 0 ? "\(Int(bufferProgress * 100))%" : "…")
+                                .font(.caption.weight(.semibold))
+                        } else {
+                            Image(systemName: localPlay == nil ? "arrow.down.to.line" : "checkmark")
+                        }
+                    }
+                    .disabled(playlist == nil || localPlay != nil)
+                    .accessibilityLabel("Buffer on this device")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        native = true
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    }
+                    .disabled(playlist == nil)
+                    .accessibilityLabel("Play fullscreen on this device")
+                }
+            }
+            .fullScreenCover(isPresented: $native) {
+                if let playlist {
+                    NativeStreamScreen(
+                        url: localPlay ?? playlist,
+                        referer: pageURL()?.absoluteString,
+                        episodeLabel: isTV ? "S\(season) E\(episode)" : nil,
+                        onPrevious: isTV ? { shift(episode: -1) } : nil,
+                        onNext: isTV ? { shift(episode: 1) } : nil
+                    ) {
+                        await saveUnified()
+                    }
+                }
+            }
+            .task(id: bufferMovie?.id) { await watchBuffer() }
+        }
+    }
+
+    private func pageURL() -> URL? {
+        guard let tmdb = result.tmdbId else { return nil }
+        if isTV {
+            return URL(string: "https://www.rivestream.app/watch?type=tv&id=\(tmdb)&season=\(season)&episode=\(episode)")
+        }
+        return URL(string: "https://www.rivestream.app/watch?type=movie&id=\(tmdb)")
+    }
+
+    private func shift(episode delta: Int) {
+        let next = episode + delta
+        if next < 1 {
+            guard season > 1 else { return }
+            season -= 1
+            episode = 1
+        } else {
+            episode = next
+        }
+        bufferTask?.cancel()
+        bufferTask = nil
+        bufferMovie = nil
+        localPlay = nil
+        playlist = nil
+        bufferProgress = 0
+        native = false
+    }
+
+    private func watchBuffer() async {
+        while !Task.isCancelled, let id = bufferMovie?.id, localPlay == nil {
+            if let progress = await library.media.hlsDownloadProgress(id: id) {
+                bufferProgress = progress
+            }
+            try? await Task.sleep(for: .milliseconds(400))
+        }
+    }
+
+    private func startBuffer() {
+        guard bufferTask == nil, let playlist else { return }
+        let movie = localMovie(result, playlist: playlist)
+        bufferMovie = movie
+        let headers = pageURL().map { ["Referer": $0.absoluteString] } ?? [:]
+        bufferTask = Task {
+            let file = try? await library.media.downloadHLS(api: library.api, movie: movie, hlsURL: playlist, headers: headers)
+            localPlay = file
+            bufferProgress = file == nil ? bufferProgress : 1
+            return file
+        }
+    }
+
+    /// Waits for the on-device HLS package, then writes one mp4 from it.
+    private func saveUnified() async -> URL? {
+        startBuffer()
+        guard let movpkg = await bufferTask?.value else { return nil }
+        return try? await library.media.exportUnifiedVideo(movpkg: movpkg, name: result.title)
+    }
+
+}
+
+private struct NativeStreamScreen: View {
+    let url: URL
+    let referer: String?
+    var episodeLabel: String?
+    var onPrevious: (() -> Void)?
+    var onNext: (() -> Void)?
+    var onSave: () async -> URL?
+    @Environment(\.dismiss) private var dismiss
+    @State private var player = AVPlayer()
+    @State private var saving = false
+    @State private var savedFile: URL?
+    @State private var chrome = true
+    @State private var hideChrome: Task<Void, Never>?
+
+    var body: some View {
+        SystemPlayer(player: player)
+            .ignoresSafeArea()
+            .background(Color.black)
+            .overlay(alignment: .top) {
+                HStack(spacing: 12) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.glass)
+                        .accessibilityLabel("Close")
+                    if let episodeLabel {
+                        Button { onPrevious?() } label: { Image(systemName: "backward.end.fill") }
+                            .buttonStyle(.glass)
+                            .disabled(onPrevious == nil)
+                        Text(episodeLabel)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .glassEffect(.regular, in: Capsule())
+                        Button { onNext?() } label: { Image(systemName: "forward.end.fill") }
+                            .buttonStyle(.glass)
+                            .disabled(onNext == nil)
+                    }
+                    Button {
+                        saving = true
+                        Task {
+                            savedFile = await onSave()
+                            saving = false
+                        }
+                    } label: {
+                        if saving { ProgressView() } else { Image(systemName: savedFile == nil ? "square.and.arrow.down" : "checkmark") }
+                    }
+                    .buttonStyle(.glass)
+                    .disabled(saving)
+                    .accessibilityLabel("Save")
+                }
+                .padding(.top, 8)
+                .opacity(chrome ? 1 : 0)
+                .allowsHitTesting(chrome)
+                .animation(.easeInOut(duration: 0.25), value: chrome)
+            }
+            .simultaneousGesture(TapGesture().onEnded { reveal() })
+            .onAppear { reveal() }
+            .sheet(isPresented: Binding(get: { savedFile != nil }, set: { if !$0 { savedFile = nil } })) {
+                if let savedFile {
+                    ActivityShare(url: savedFile)
+                }
+            }
+            .onAppear {
+                var headers = ["User-Agent": "Watch/1"]
+                if let referer { headers["Referer"] = referer }
+                let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
+                player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
+                player.play()
+            }
+            .onDisappear { player.pause() }
+    }
+
+    private func reveal() {
+        chrome = true
+        hideChrome?.cancel()
+        hideChrome = Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            chrome = false
+        }
+    }
+}
+
+private struct SystemPlayer: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let vc = AVPlayerViewController()
+        vc.player = player
+        vc.showsPlaybackControls = true
+        vc.allowsPictureInPicturePlayback = true
+        vc.updatesNowPlayingInfoCenter = true
+        vc.speeds = [AVPlaybackSpeed(rate: 1, localizedName: "1×")]
+        return vc
+    }
+
+    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        if vc.player !== player { vc.player = player }
+    }
+}
+
+private struct ActivityShare: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+private func rivePageURL(_ result: SourceSearchResult) -> URL? {
+    guard let tmdb = result.tmdbId else { return nil }
+    if result.id.hasPrefix("meta:tv:") {
+        let parts = result.id.split(separator: ":")
+        let season = parts.count > 3 ? parts[3] : "1"
+        let episode = parts.count > 4 ? parts[4] : "1"
+        return URL(string: "https://www.rivestream.app/watch?type=tv&id=\(tmdb)&season=\(season)&episode=\(episode)")
+    }
+    return URL(string: "https://www.rivestream.app/watch?type=movie&id=\(tmdb)")
+}
+
+private func localMovie(_ result: SourceSearchResult, playlist: URL) -> Movie {
+    let now = ISO8601DateFormatter().string(from: Date())
+    return Movie(
+        id: UUID().uuidString,
+        filename: "\(result.title).movpkg",
+        byteSize: 0,
+        contentType: "application/vnd.apple.mpegurl",
+        ext: "movpkg",
+        title: result.title,
+        originalTitle: nil,
+        year: result.year,
+        overview: "",
+        runtimeMin: nil,
+        genres: [],
+        imdbId: result.imdbId,
+        tmdbId: result.tmdbId,
+        osHash: nil,
+        streamId: nil,
+        hlsUrl: playlist.absoluteString,
+        thumbnailUrl: result.poster,
+        downloadUrl: nil,
+        readyToStream: true,
+        posterUrl: result.poster,
+        backdropUrl: nil,
+        trailerSite: nil,
+        trailerKey: nil,
+        trailerUrl: nil,
+        trailer: nil,
+        trailerFileUrl: nil,
+        trailerFile: nil,
+        trailerCaptions: nil,
+        status: "ready",
+        matchSource: "rive",
+        matchP: nil,
+        matchNote: result.id,
+        subtitles: [],
+        createdAt: now,
+        updatedAt: now
+    )
+}
+
+private func bestVariant(_ playlist: URL) async throws -> URL {
+    let (data, response) = try await URLSession.shared.data(from: playlist)
+    guard let http = response as? HTTPURLResponse, http.statusCode == 200, let text = String(data: data, encoding: .utf8) else {
+        return playlist
+    }
+    guard text.contains("#EXT-X-STREAM-INF") else { return playlist }
+    var bestBandwidth = -1
+    var bestURI: String?
+    var pending: Int?
+    for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        let line = raw.trimmingCharacters(in: .whitespaces)
+        if line.hasPrefix("#EXT-X-STREAM-INF"), let range = line.range(of: "BANDWIDTH=") {
+            pending = Int(line[range.upperBound...].prefix { $0.isNumber })
+        } else if !line.isEmpty, !line.hasPrefix("#"), let bandwidth = pending {
+            if bandwidth > bestBandwidth {
+                bestBandwidth = bandwidth
+                bestURI = line
+            }
+            pending = nil
+        }
+    }
+    guard let bestURI, let url = URL(string: bestURI, relativeTo: playlist)?.absoluteURL else { return playlist }
+    return url
+}
+
+private struct RiveWebView: UIViewRepresentable {
+    var url: URL
+    var onPlaylist: (URL) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPlaylist: onPlaylist) }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        let script = WKUserScript(source: Self.hook, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        config.userContentController.addUserScript(script)
+        config.userContentController.add(context.coordinator, name: "playlist")
+        config.allowsInlineMediaPlayback = true
+        let web = WKWebView(frame: .zero, configuration: config)
+        web.navigationDelegate = context.coordinator
+        web.scrollView.minimumZoomScale = 1
+        web.scrollView.maximumZoomScale = 1
+        web.scrollView.bouncesZoom = false
+        web.scrollView.pinchGestureRecognizer?.isEnabled = false
+        context.coordinator.web = web
+        web.load(URLRequest(url: url))
+        return web
+    }
+
+    func updateUIView(_ web: WKWebView, context: Context) {}
+
+    static let hook = """
+    (function() {
+      var last = "";
+      function lockZoom() {
+        var meta = document.querySelector('meta[name="viewport"]');
+        if (!meta) {
+          meta = document.createElement('meta');
+          meta.name = 'viewport';
+          (document.head || document.documentElement).appendChild(meta);
+        }
+        meta.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no';
+      }
+      lockZoom();
+      document.addEventListener('DOMContentLoaded', lockZoom);
+      document.addEventListener('gesturestart', function(e) { e.preventDefault(); }, { passive: false });
+      document.addEventListener('dblclick', function(e) { e.preventDefault(); }, true);
+      function playlist(u) {
+        var s = String(u || "");
+        return /\\.m3u8|mpegurl/i.test(s);
+      }
+      function note(u) {
+        try {
+          if (!playlist(u)) return;
+          last = String(u);
+          window.webkit.messageHandlers.playlist.postMessage(last);
+        } catch (e) {}
+      }
+      var ofetch = window.fetch;
+      if (ofetch) window.fetch = function(input) {
+        try { note(typeof input === "string" ? input : (input && input.url)); } catch (e) {}
+        return ofetch.apply(this, arguments);
+      };
+      var open = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function(method, url) {
+        try { note(url); } catch (e) {}
+        return open.apply(this, arguments);
+      };
+      document.addEventListener("playing", function(e) {
+        var src = e.target && (e.target.currentSrc || e.target.src);
+        if (!src || !playlist(src)) src = last;
+        if (src && playlist(src)) {
+          window.webkit.messageHandlers.playlist.postMessage(String(src));
+        }
+      }, true);
+    })();
+    """
+
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+        var onPlaylist: (URL) -> Void
+        weak var web: WKWebView?
+        private var sent = false
+        init(onPlaylist: @escaping (URL) -> Void) { self.onPlaylist = onPlaylist }
+
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard !sent, let raw = message.body as? String, let url = URL(string: raw) else { return }
+            sent = true
+            let store = web?.configuration.websiteDataStore.httpCookieStore
+            store?.getAllCookies { cookies in
+                for cookie in cookies { HTTPCookieStorage.shared.setCookie(cookie) }
+                DispatchQueue.main.async { self.onPlaylist(url) }
+            }
         }
     }
 }

@@ -1,78 +1,112 @@
-' Detail panel: item metadata with Play / Close buttons.
-' Communicates via interface fields only (playIndex / closeIndex counters
-' so repeated presses always fire observer callbacks).
-
-sub Init()
-  m.poster = m.top.findNode("poster")
+sub InitDetailView()
   m.backdrop = m.top.findNode("backdrop")
-  m.title = m.top.findNode("title")
-  m.year = m.top.findNode("year")
-  m.overview = m.top.findNode("overview")
-  m.meta = m.top.findNode("meta")
+  m.scrimGradient = m.top.findNode("scrimGradient")
+  m.titleLabel = m.top.findNode("title")
+  m.metaLabel = m.top.findNode("meta")
+  m.genresLabel = m.top.findNode("genres")
+  m.overviewLabel = m.top.findNode("overview")
   m.playBtn = m.top.findNode("playBtn")
-  m.closeBtn = m.top.findNode("closeBtn")
+  m.playBg = m.playBtn.findNode("bg")
+  m.playText = m.playBtn.findNode("text")
+  m.downloadBtn = m.top.findNode("downloadBtn")
+  m.downloadBg = m.downloadBtn.findNode("bg")
+  m.downloadText = m.downloadBtn.findNode("text")
 
-  m.playBtn.ObserveField("buttonSelected", "OnPlay")
-  m.closeBtn.ObserveField("buttonSelected", "OnClose")
-  m.top.ObserveField("itemContent", "OnItemContent")
-  if m.top.itemContent <> invalid
-    OnItemContent()
+  m.top.ObserveField("itemContent", "OnContentChange")
+  m.playBtn.ObserveField("buttonSelected", "OnPlayFocus")
+  m.downloadBtn.ObserveField("buttonSelected", "OnDownloadFocus")
+  m.playBtn.ObserveField("buttonSelected", "OnPlayPressed")
+  m.downloadBtn.ObserveField("buttonSelected", "OnDownloadPressed")
+end sub
+
+sub OnVisibleChange()
+  if m.top.visible then
+    m.playBtn.SetFocus(true)
   end if
 end sub
 
-sub OnItemContent()
-  item = m.top.itemContent
-  if item = invalid then return
-  m.title.text = ValidStr(item.GetField("title"))
-  year = item.GetField("year")
-  m.year.text = ""
-  if year <> invalid and year <> 0
-    m.year.text = "(" + StrI(year).Trim() + ")"
-  end if
-  m.overview.text = ValidStr(item.GetField("overview"))
-  m.meta.text = MetaLine(item)
-  poster = item.GetField("HDPosterUrl")
-  if poster <> invalid and poster <> ""
-    m.poster.uri = poster
-  end if
-  backdrop = item.GetField("backdropUrl")
-  if backdrop <> invalid and backdrop <> ""
-    m.backdrop.uri = backdrop
-  end if
-end sub
+sub OnContentChange()
+  content = m.top.itemContent
+  if content = invalid then return
 
-function MetaLine(item as Object) as String
-  parts = []
-  runtime = item.GetField("runtimeMin")
-  if runtime <> invalid and runtime > 0
-    h = runtime \ 60
-    mm = runtime mod 60
-    if h > 0
-      parts.Push(StrI(h).Trim() + "h " + StrI(mm).Trim() + "m")
-    else
-      parts.Push(StrI(mm).Trim() + "m")
-    end if
+  if content.backdropUrl <> invalid
+    m.backdrop.uri = content.backdropUrl
   end if
-  genres = item.GetField("genres")
-  if genres <> invalid
+
+  m.titleLabel.text = content.itemTitle
+
+  meta = ""
+  if content.itemYear <> invalid and content.itemYear <> 0
+    meta = StrI(content.itemYear).Trim()
+  end if
+  if content.itemRuntime <> invalid and content.itemRuntime > 0
+    if meta <> "" then meta = meta + "  •  "
+    meta = meta + StrI(content.itemRuntime).Trim() + " min"
+  end if
+  if content.itemImdbId <> invalid and content.itemImdbId <> ""
+    if meta <> "" then meta = meta + "  •  "
+    meta = meta + content.itemImdbId
+  end if
+  m.metaLabel.text = meta
+
+  genres = content.itemGenres
+  gText = ""
+  if genres <> invalid and genres.Count() > 0
     for each g in genres
-      parts.Push(g)
+      if gText <> "" then gText = gText + "  •  "
+      gText = gText + g
     end for
   end if
-  out = ""
-  for each p in parts
-    if out <> "" then out = out + "  |  "
-    out = out + p
-  end for
-  return out
-end function
+  m.genresLabel.text = gText
 
-sub OnPlay()
-  m.playBtn.buttonSelected = false
-  m.top.playIndex = m.top.playIndex + 1
+  overview = content.itemOverview
+  if overview = invalid then overview = ""
+  m.overviewLabel.text = overview
+
+  ' Update download button text based on state
+  if content.itemDownloaded <> invalid and content.itemDownloaded = true
+    m.downloadText.text = "Downloaded"
+    m.downloadBg.color = "0x444444FF"
+    m.downloadBtn.enabled = false
+  else
+    m.downloadText.text = "Download"
+    m.downloadBg.color = "0x333333FF"
+    m.downloadBtn.enabled = true
+  end if
 end sub
 
-sub OnClose()
-  m.closeBtn.buttonSelected = false
-  m.top.closeIndex = m.top.closeIndex + 1
+sub OnPlayFocus()
+  focused = m.playBtn.buttonSelected
+  if focused
+    m.playBg.color = "0xFF1A2BFF"
+    m.playBtn.scale = [1.05, 1.05]
+  else
+    m.playBg.color = "0xE50914FF"
+    m.playBtn.scale = [1.0, 1.0]
+  end if
+end sub
+
+sub OnDownloadFocus()
+  focused = m.downloadBtn.buttonSelected
+  if focused and m.downloadBtn.enabled
+    m.downloadBg.color = "0x444444FF"
+    m.downloadBtn.scale = [1.05, 1.05]
+  else
+    m.downloadBg.color = "0x333333FF"
+    m.downloadBtn.scale = [1.0, 1.0]
+  end if
+end sub
+
+sub OnPlayPressed()
+  if m.playBtn.buttonSelected then
+    m.top.selectedItem = m.top.itemContent
+    m.top.selectIndex = m.top.selectIndex + 1
+  end if
+end sub
+
+sub OnDownloadPressed()
+  if m.downloadBtn.buttonSelected and m.downloadBtn.enabled then
+    ' TODO: Trigger download via worker
+    print "Download requested for: "; m.top.itemContent.itemId
+  end if
 end sub

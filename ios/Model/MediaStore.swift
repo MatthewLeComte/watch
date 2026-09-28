@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import ImageIO
 
 actor MediaStore {
     private var playerWaiters = 0
@@ -48,11 +49,12 @@ actor MediaStore {
     }
 
     /// Native HLS background download using AVAssetDownloadURLSession
-    func downloadHLS(api: WatchAPI, movie: Movie, hlsURL: URL) async throws -> URL {
+    func downloadHLS(api: WatchAPI, movie: Movie, hlsURL: URL, headers: [String: String] = [:]) async throws -> URL {
         let session = HLSDownloadSession(movieID: movie.id, mediaStore: self)
         downloadSessions[movie.id] = session
 
-        let asset = AVURLAsset(url: hlsURL)
+        let options: [String: Any]? = headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers]
+        let asset = AVURLAsset(url: hlsURL, options: options)
         let config = URLSessionConfiguration.background(withIdentifier: "com.watch.hls.\(movie.id)")
         config.isDiscretionary = false
         config.sessionSendsLaunchEvents = true
@@ -91,6 +93,39 @@ actor MediaStore {
         flights[id] = nil
     }
 
+    /// Turn a finished on-device HLS package into one mp4 next to it.
+    func exportUnifiedVideo(movpkg: URL, name: String) async throws -> URL {
+        let asset = AVURLAsset(url: movpkg)
+        let safe = name
+            .replacingOccurrences(of: "/", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let output = movpkg.deletingLastPathComponent().appendingPathComponent((safe.isEmpty ? "Movie" : safe) + ".mp4")
+        if FileManager.default.fileExists(atPath: output.path) {
+            try FileManager.default.removeItem(at: output)
+        }
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        session.outputURL = output
+        session.outputFileType = .mp4
+        await session.export()
+        guard session.status == .completed else {
+            throw session.error ?? CocoaError(.fileWriteUnknown)
+        }
+        return output
+    }
+
+    func removePlayback(id: String) throws {
+        flights[id]?.cancel()
+        flights[id] = nil
+        downloadSessions[id]?.cancel()
+        downloadSessions[id] = nil
+        let file = try directory(id: id).appendingPathComponent("hls.movpkg")
+        if FileManager.default.fileExists(atPath: file.path) {
+            try FileManager.default.removeItem(at: file)
+        }
+    }
+
     func remove(id: String) throws {
         flights[id]?.cancel()
         flights[id] = nil
@@ -100,15 +135,80 @@ actor MediaStore {
         try FileManager.default.removeItem(at: folder)
     }
 
-    func posterFile(api: WatchAPI, id: String) async -> URL? {
+    func posterFile(api: WatchAPI, id: String, knownURL: URL? = nil) async -> URL? {
         do {
             let file = try directory(id: id).appendingPathComponent("poster.img")
-            if FileManager.default.fileExists(atPath: file.path) { return file }
-            let data = try await api.poster(id: id)
+            if imageFile(file) { return file }
+            try? FileManager.default.removeItem(at: file)
+            var data: Data?
+            if let knownURL {
+                data = try? await URLSession.shared.data(from: knownURL).0
+            }
+            if data == nil || !imageData(data!) {
+                data = try? await api.poster(id: id)
+            }
+            guard let data, imageData(data) else { return nil }
             try data.write(to: file, options: .atomic)
             return file
         } catch {
             return nil
+        }
+    }
+
+    private func imageFile(_ url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url) else { return false }
+        return imageData(data)
+    }
+
+    private func imageData(_ data: Data) -> Bool {
+        guard data.count > 1024,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(source) > 0,
+              CGImageSourceCreateImageAtIndex(source, 0, nil) != nil
+        else { return false }
+        return true
+    }
+
+    /// Saved playlist, if one is already on disk. Never hits the network.
+    func cachedPlaylist(_ movie: Movie) -> URL? {
+        guard let file = try? directory(id: movie.id).appendingPathComponent("index.m3u8"),
+              let text = try? String(contentsOf: file, encoding: .utf8),
+              text.contains("#EXTM3U"),
+              text.contains("https://"),
+              !text.contains("file://")
+        else { return nil }
+        return file
+    }
+
+    /// Download the playlist and keep it. Play does not wait on this.
+    func storePlaylist(api: WatchAPI, movie: Movie) async {
+        if cachedPlaylist(movie) != nil { return }
+        guard let remote = URL(string: "\(api.base)/v1/items/\(movie.id)/index.m3u8?key=\(api.key)"),
+              let file = try? directory(id: movie.id).appendingPathComponent("index.m3u8")
+        else { return }
+        var request = URLRequest(url: remote)
+        request.timeoutInterval = 20
+        request.setValue("Bearer \(api.key)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let text = String(data: data, encoding: .utf8),
+              text.contains("#EXTM3U"),
+              text.contains("https://")
+        else { return }
+        try? data.write(to: file, options: .atomic)
+        // The playlist is small. The first video piece is what play waits on, so fetch it now too.
+        guard let seg = URL(string: "\(api.base)/v1/items/\(movie.id)/seg/0.ts?key=\(api.key)") else { return }
+        var warm = URLRequest(url: seg)
+        warm.timeoutInterval = 30
+        warm.setValue("Bearer \(api.key)", forHTTPHeaderField: "Authorization")
+        _ = try? await URLSession.shared.data(for: warm)
+    }
+
+    func cachePlaylists(api: WatchAPI, movies: [Movie]) async {
+        await withTaskGroup(of: Void.self) { group in
+            for movie in movies {
+                group.addTask { await self.storePlaylist(api: api, movie: movie) }
+            }
         }
     }
 

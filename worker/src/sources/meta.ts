@@ -11,17 +11,25 @@ export class TmdbUnconfigured extends Error {
   constructor() { super("tmdb_unconfigured"); }
 }
 
+let cachedBearer: string | null = null;
+let cachedKey: string | null = null;
+
 async function secretText(value: string | { get?: () => Promise<string> } | undefined): Promise<string> {
   if (!value) return "";
   if (typeof value === "string") return value;
   try { return (await value.get?.()) || ""; } catch { return ""; }
 }
 
+async function tmdbAuth(env: Env): Promise<{ bearer: string; apiKey: string }> {
+  if (cachedBearer === null) cachedBearer = await secretText(env.WATCH_TMDB_API_READ_ACCESS_TOKEN);
+  if (cachedKey === null) cachedKey = await secretText(env.WATCH_TMDB_API_KEY);
+  return { bearer: cachedBearer, apiKey: cachedKey };
+}
+
 async function tmdbFetch(env: Env, pathAndQuery: string): Promise<Response> {
   const headers: Record<string, string> = { Accept: "application/json", "User-Agent": "Watch/1" };
   let url = `${TMDB_BASE}${pathAndQuery}`;
-  const bearer = await secretText(env.WATCH_TMDB_API_READ_ACCESS_TOKEN);
-  const apiKey = await secretText(env.WATCH_TMDB_API_KEY);
+  const { bearer, apiKey } = await tmdbAuth(env);
   if (bearer) {
     headers.Authorization = `Bearer ${bearer}`;
   } else if (apiKey) {
@@ -29,7 +37,15 @@ async function tmdbFetch(env: Env, pathAndQuery: string): Promise<Response> {
   } else {
     throw new TmdbUnconfigured();
   }
-  return fetch(url, { headers, signal: AbortSignal.timeout(10000) });
+  const cacheKey = new Request(`https://tmdb-cache.watch.internal${pathAndQuery}`);
+  const hit = await caches.default.match(cacheKey);
+  if (hit) return hit;
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
+  if (res.ok) {
+    const stored = new Response(res.clone().body, { status: res.status, headers: { "content-type": "application/json", "cache-control": "public, max-age=600" } });
+    await caches.default.put(cacheKey, stored);
+  }
+  return res;
 }
 
 type TmdbHit = {
@@ -56,23 +72,15 @@ function parseMetaId(id: string): { mediaType: "movie" | "tv"; tmdbId: number; s
   return { mediaType: "movie", tmdbId, season: 1, episode: 1 };
 }
 
-async function toResult(env: Env, hit: TmdbHit): Promise<SearchResult> {
+function toResult(hit: TmdbHit): SearchResult {
   const mediaType = hit.media_type === "tv" ? "tv" : "movie";
-  let imdbId: string | null = null;
-  try {
-    const ext = await tmdbFetch(env, `/${mediaType}/${hit.id}/external_ids`);
-    if (ext.ok) {
-      const body = await ext.json() as { imdb_id?: string | null };
-      imdbId = body.imdb_id ?? null;
-    }
-  } catch { /* the TMDB id is still the result */ }
   const aired = hit.release_date || hit.first_air_date;
   return {
     id: mediaType === "tv" ? `meta:tv:${hit.id}:1:1` : `meta:${hit.id}`,
     tmdbId: hit.id,
     title: hit.title || hit.name || "",
     year: aired ? Number(aired.slice(0, 4)) : null,
-    imdbId,
+    imdbId: null,
     poster: hit.poster_path ? `${TMDB_IMAGE}${hit.poster_path}` : null,
     type: mediaType === "tv" ? "series" : "movie",
   };
@@ -87,7 +95,7 @@ export const sourceMeta: Source = {
     if (!res.ok) return [];
     const data = await res.json() as { results?: TmdbHit[] };
     const hits = (data.results ?? []).filter((r) => r.media_type === "movie" || r.media_type === "tv").slice(0, 10);
-    return Promise.all(hits.map((r) => toResult(env, r)));
+    return hits.map((r) => toResult(r));
   },
 
   async searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null> {
@@ -99,9 +107,32 @@ export const sourceMeta: Source = {
     const hit = movie || tv;
     if (!hit?.id) return null;
     hit.media_type = movie ? "movie" : "tv";
-    const result = await toResult(env, hit);
+    const result = toResult(hit);
     result.imdbId = imdbId;
     return result;
+  },
+
+  async seasons(env: Env, tmdbId: number): Promise<{ number: number; name: string; episodeCount: number }[]> {
+    const res = await tmdbFetch(env, `/tv/${tmdbId}?language=en-US`);
+    if (!res.ok) return [];
+    const body = await res.json() as { seasons?: { season_number: number; name?: string; episode_count?: number }[] };
+    return (body.seasons ?? [])
+      .filter((s) => (s.episode_count ?? 0) > 0)
+      .map((s) => ({
+        number: s.season_number,
+        name: s.season_number === 0 ? "Specials" : (s.name || `Season ${s.season_number}`),
+        episodeCount: s.episode_count ?? 0,
+      }));
+  },
+
+  async episodes(env: Env, tmdbId: number, season: number): Promise<{ number: number; name: string }[]> {
+    const res = await tmdbFetch(env, `/tv/${tmdbId}/season/${season}?language=en-US`);
+    if (!res.ok) return [];
+    const body = await res.json() as { episodes?: { episode_number: number; name?: string }[] };
+    return (body.episodes ?? []).map((ep) => ({
+      number: ep.episode_number,
+      name: ep.name || `Episode ${ep.episode_number}`,
+    }));
   },
 
   async resolve(env: Env, id: string): Promise<StreamInfo | null> {
@@ -144,7 +175,8 @@ export const sourceMeta: Source = {
 
     const masterText = await hlsRes.text();
     const { qualities, subtitles } = parseMasterPlaylist(masterText, stream.hlsUrl);
-    const selectedQuality = qualities.find(q => q.height === quality.height) || qualities[0];
+    const selectedQuality = qualities.find(q => q.height === quality.height)
+      || qualities.reduce<Quality | undefined>((best, q) => (!best || q.height > best.height || (q.height === best.height && q.bandwidth > best.bandwidth) ? q : best), undefined);
     if (!selectedQuality) throw new Error("no_quality");
 
     const baseUrl = stream.hlsUrl.substring(0, stream.hlsUrl.lastIndexOf("/") + 1);

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="ShelfView" extends="Group">
+  <interface>
+    <field id="title" type="string" />
+    <field id="items" type="array" />
+  </interface>
+  <children>
+    <Label
+      id="titleLabel"
+      translation="[20, 0]"
+      width="1880"
+      font="font:LargeBoldSystemFont"
+      color="0xFFFFFFFF"
+    />
+    <RowList
+      id="rowList"
+      translation="[20, 50]"
+      itemComponentName="ShelfItem"
+      itemSize="[280, 420]"
+      itemSpacing="24"
+      numRows="1"
+      showRowLabels="false"
+      rowFocusAnimationStyle="floatingFocus"
+    />
+  </children>
+  <script type="text/brightscript" uri="pkg:/components/ShelfView.brs" />
+</component>

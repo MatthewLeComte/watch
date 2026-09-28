@@ -3,6 +3,12 @@ export interface Env {
   /** Bucket name is `watch`. Binding id differs because Workers reject two bindings named watch. */
   watch_bucket: R2Bucket;
   STREAM: StreamBinding;
+  /** Cloudflare Browser Rendering. Launch with puppeteer.launch(env.BROWSER). */
+  BROWSER?: import("@cloudflare/puppeteer").BrowserWorker;
+  /** KV namespace for RiveStream session persistence (cookies, localStorage). */
+  RIVESTREAM_SESSION?: KVNamespace;
+  /** Residential proxy for RiveStream (http://user:pass@host:port). Empty = direct. */
+  RIVESTREAM_PROXY?: string;
   WATCH_KEY: string;
   /** Secrets Store binding: Ed25519 public key for the Roku channel. */
   WATCH_PUBLIC_KEY: StoreSecret;

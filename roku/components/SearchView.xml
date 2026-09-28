@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="SearchView" extends="Group">
+  <interface>
+    <field id="searchQuery" type="string" />
+    <field id="results" type="array" />
+    <field id="selectedItem" type="node" />
+    <field id="selectIndex" type="integer" />
+    <field id="visible" type="boolean" onChange="OnVisibleChange" />
+  </interface>
+  <children>
+    <Rectangle width="1920" height="1080" color="0x0E0E10FF" />
+    <Rectangle
+      id="searchBar"
+      width="1920"
+      height="120"
+      color="0x000000C0"
+    >
+      <Label
+        id="searchLabel"
+        translation="[80, 30]"
+        width="1600"
+        font="font:LargeBoldSystemFont"
+        text="Search Movies & Shows"
+        color="0xFFFFFFFF"
+      />
+      <TextEditBox
+        id="queryBox"
+        translation="[80, 90]"
+        width="1600"
+        height="60"
+        font="font:MediumSystemFont"
+        text=""
+        color="0xFFFFFFFF"
+        hintText="Type to search..."
+        hintColor="0x888888FF"
+      />
+    </Rectangle>
+    <MarkupGrid
+      id="resultsGrid"
+      translation="[20, 160]"
+      itemComponentName="SearchResultItem"
+      itemSize="[280, 420]"
+      itemSpacing="[24, 24]"
+      numColumns="5"
+      rowItemSize="[280, 420]"
+      rowItemSpacing="[24, 24]"
+      showSectionLabels="false"
+    />
+    <Rectangle
+      id="loading"
+      width="1920"
+      height="1080"
+      color="0x0E0E10FF"
+      visible="false"
+    >
+      <Label
+        translation="[860, 520]"
+        font="font:MediumSystemFont"
+        text="Searching..."
+        color="0xFFFFFFFF"
+        horizAlign="center"
+      />
+    </Rectangle>
+    <Rectangle
+      id="emptyState"
+      width="1920"
+      height="1080"
+      color="0x0E0E10FF"
+      visible="false"
+    >
+      <Label
+        translation="[460, 480]"
+        width="1000"
+        font="font:MediumSystemFont"
+        text="No results found"
+        color="0xFFFFFFFF"
+        horizAlign="center"
+        wrap="true"
+      />
+    </Rectangle>
+  </children>
+  <script type="text/brightscript" uri="pkg:/components/SearchView.brs" />
+</component>

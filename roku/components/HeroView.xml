@@ -1,20 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<component name="DetailView" extends="Group">
+<component name="HeroView" extends="Group">
   <interface>
     <field id="itemContent" type="node" />
-    <field id="visible" type="boolean" onChange="OnVisibleChange" />
   </interface>
   <children>
-    <Rectangle width="1920" height="1080" color="0x0E0E10FF" />
     <Poster
       id="backdrop"
       width="1920"
       height="1080"
       loadDisplayMode="scaleToZoom"
     />
-    <Rectangle width="1920" height="1080">
+    <Rectangle
+      id="scrim"
+      width="1920"
+      height="1080"
+    >
       <Rectangle
-        id="scrimGradient"
+        id="fadeGradient"
         width="1920"
         height="600"
         translation="[0, 480]"
@@ -36,25 +38,20 @@
       color="0xDDDDDDFF"
     />
     <Label
-      id="genres"
-      translation="[80, 860]"
-      width="1200"
-      font="font:SmallSystemFont"
-      color="0xAAAAAAFF"
-    />
-    <Label
       id="overview"
-      translation="[80, 900]"
+      translation="[80, 880]"
       width="900"
       font="font:SmallSystemFont"
       wrap="true"
-      numLines="5"
+      numLines="4"
       color="0xE0E0E0FF"
     />
-    <Group
+    <Button
       id="playBtn"
-      translation="[80, 980]"
-      focusable="true"
+      translation="[80, 960]"
+      width="280"
+      height="72"
+      text="Play"
     >
       <Rectangle id="bg" width="280" height="72" color="0xE50914FF" />
       <Label
@@ -66,23 +63,7 @@
         color="0xFFFFFFFF"
         horizAlign="center"
       />
-    </Group>
-    <Group
-      id="downloadBtn"
-      translation="[380, 980]"
-      focusable="true"
-    >
-      <Rectangle id="bg" width="280" height="72" color="0x333333FF" />
-      <Label
-        id="text"
-        translation="[0, 18]"
-        width="280"
-        font="font:MediumBoldSystemFont"
-        text="Download"
-        color="0xFFFFFFFF"
-        horizAlign="center"
-      />
-    </Group>
+    </Button>
   </children>
-  <script type="text/brightscript" uri="pkg:/components/DetailView.brs" />
+  <script type="text/brightscript" uri="pkg:/components/HeroView.brs" />
 </component>

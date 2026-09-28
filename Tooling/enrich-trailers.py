@@ -6,6 +6,7 @@ completes. This step downloads the picture, the sound, and the captions,
 then stores them in R2. Run it on a new upload, or leave the launch agent running.
 """
 import json
+import os
 import re
 import subprocess
 import urllib.error
@@ -88,8 +89,9 @@ def video(yt: str) -> Path | None:
     if dest.exists():
         dest.unlink()
     proc = subprocess.run(
-        ["yt-dlp", "-f", "bv*[height<=480]+ba/b[height<=480]", "--merge-output-format", "mp4",
-         "--max-filesize", "80M", "--no-playlist", "-o", str(dest),
+        ["yt-dlp", "-f", "bv*[format_note!*=Premium]+ba[format_note!*=Premium]/b[format_note!*=Premium]",
+         "--merge-output-format", "mp4",
+         "--match-filter", "duration <= 600", "--no-playlist", "-o", str(dest),
          f"https://www.youtube.com/watch?v={yt}"],
         capture_output=True, text=True,
     )
@@ -107,7 +109,7 @@ def main():
             groups.setdefault(yt, []).append(it)
     todo = []
     for yt, rows in groups.items():
-        need_file = any(not r.get("trailerFile") for r in rows)
+        need_file = os.environ.get("UPGRADE_VIDEO") == "1" or any(not r.get("trailerFile") for r in rows)
         need_caps = any(not r.get("trailerCaptions") for r in rows)
         if need_file or need_caps:
             todo.append((yt, rows, need_file, need_caps))

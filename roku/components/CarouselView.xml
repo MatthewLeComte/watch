@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="CarouselView" extends="RowList">
+  <interface>
+    <field id="items" type="array" />
+  </interface>
+  <itemComponentName="CarouselItem" />
+  <itemSize>[108, 162]</itemSize>
+  <itemSpacing>12</itemSpacing>
+  <numRows>1</numRows>
+  <showRowLabels>false</showRowLabels>
+  <rowFocusAnimationStyle>floatingFocus</rowFocusAnimationStyle>
+  <translation>[20, 1020]</translation>
+</component>

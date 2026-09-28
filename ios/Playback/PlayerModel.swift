@@ -25,20 +25,25 @@ final class PlayerModel {
     func start(position: Double) async {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
-        let local = await media.playableFile(movie)
-        let asset: AVURLAsset
-        if let local {
-            asset = AVURLAsset(url: local)
-        } else {
-            // HLS playlist. The key is on the playlist and every segment URL.
-            let mediaURL = "\(api.base)/v1/items/\(movie.id)/index.m3u8?key=\(api.key)"
-            guard let url = URL(string: mediaURL) else { return }
-            asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(api.key)"]])
+        
+        // Prefer HLS URL for AirPlay compatibility (local file:// URLs don't work with AirPlay).
+        // Only fall back to local file when truly offline.
+        let mediaURL = "\(api.base)/v1/items/\(movie.id)/index.m3u8?key=\(api.key)"
+        guard let url = URL(string: mediaURL) else { return }
+        
+        // Warm up playlist cache in background (doesn't block playback)
+        if await media.cachedPlaylist(movie) == nil {
+            let api = self.api
+            let media = self.media
+            let movie = self.movie
+            Task { await media.storePlaylist(api: api, movie: movie) }
         }
+        
+        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(api.key)"]])
         let item = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: item)
         player.automaticallyWaitsToMinimizeStalling = true
-        player.allowsExternalPlayback = false
+        player.allowsExternalPlayback = true
 
         let seconds = max(0, position)
         if seconds > 1 {

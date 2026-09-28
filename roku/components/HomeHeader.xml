@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="HomeHeader" extends="Group">
+  <interface>
+    <field id="heroItem" type="node" />
+    <field id="carouselItems" type="array" />
+  </interface>
+  <children>
+    <HeroView id="hero" />
+    <CarouselView id="carousel" />
+  </children>
+  <script type="text/brightscript" uri="pkg:/components/HomeHeader.brs" />
+</component>
