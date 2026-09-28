@@ -1,24 +1,11 @@
 /**
  * StealthBrowser: Hardened Puppeteer wrapper for RiveStream.
- * Uses puppeteer-extra with stealth + anonymize-ua plugins.
- * Implements human-like interaction patterns.
+ * Implements anti-detection manually (no puppeteer-extra, not Workers-compatible).
+ * Uses @cloudflare/puppeteer with Cloudflare Browser Rendering.
  */
 
 import puppeteer from "@cloudflare/puppeteer";
-import puppeteerExtra from "puppeteer-extra";
-import StealthPlugin from "puppeteer-extra-plugin-stealth";
-import AnonymizeUaPlugin from "puppeteer-extra-plugin-anonymize-ua";
-import type { Browser, Page } from "@cloudflare/puppeteer";
-
-interface PuppeteerLaunchOptions {
-  headless?: boolean;
-  args?: string[];
-  [key: string]: any;
-}
-
-// Initialize plugins once
-puppeteerExtra.use(StealthPlugin());
-puppeteerExtra.use(AnonymizeUaPlugin());
+import type { Browser, Page, PuppeteerLaunchOptions } from "@cloudflare/puppeteer";
 
 export interface StealthBrowserConfig {
   proxy?: string; // http://user:pass@host:port
@@ -36,6 +23,14 @@ const DEFAULT_CONFIG: Required<StealthBrowserConfig> = {
   userAgent: "",
 };
 
+// Realistic user agents for rotation
+const USER_AGENTS = [
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0",
+];
+
 export class StealthBrowser {
   private browser: Browser | null = null;
   private config: Required<StealthBrowserConfig>;
@@ -46,6 +41,10 @@ export class StealthBrowser {
 
   constructor(config: StealthBrowserConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    // Pick a random UA if not specified
+    if (!this.config.userAgent) {
+      this.config.userAgent = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+    }
   }
 
   async launch(env: { BROWSER: any }): Promise<Browser> {
@@ -65,28 +64,28 @@ export class StealthBrowser {
         "--window-size=1920,1080",
         "--lang=en-US",
         "--disable-blink-features=AutomationControlled",
-        "--disable-features=IsolateOrigins,site-per-process",
+        "--disable-features=IsolateOrigins,site-per-process,TranslateUI",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-field-trial-config",
+        "--disable-ipc-flooding-protection",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--no-pings",
+        "--password-store=basic",
+        "--use-mock-keychain",
       ],
     };
 
-    const args = launchOpts.args || [];
     if (this.config.proxy) {
-      args.push(`--proxy-server=${this.config.proxy}`);
+      launchOpts.args.push(`--proxy-server=${this.config.proxy}`);
     }
-    launchOpts.args = args;
 
-    this.browser = await puppeteerExtra.launch(env.BROWSER);
-    // Apply launch options via newPage or CDP
-    const browser = this.browser;
-    if (browser) {
-      const page = await browser.newPage();
-      await page.setViewport(this.config.viewport);
-      await page.close();
-    }
-    
+    this.browser = await puppeteer.launch(env.BROWSER, launchOpts);
     this.requestCount = 0;
     this.createdAt = Date.now();
-    return this.browser!;
+    return this.browser;
   }
 
   async newPage(): Promise<Page> {
@@ -104,9 +103,19 @@ export class StealthBrowser {
     await page.emulateTimezone(this.config.timezone);
     await page.setExtraHTTPHeaders({
       "Accept-Language": this.config.locale,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Upgrade-Insecure-Requests": "1",
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-User": "?1",
+      "Sec-Fetch-Dest": "document",
+      "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+      "Sec-Ch-Ua-Mobile": "?0",
+      "Sec-Ch-Ua-Platform": '"macOS"',
     });
 
-    // Override navigator properties that stealth might miss
+    // Override navigator properties to evade detection
     await page.evaluateOnNewDocument((cfg: StealthBrowserConfig) => {
       // Ensure webdriver is undefined
       Object.defineProperty(navigator, "webdriver", {
@@ -143,6 +152,45 @@ export class StealthBrowser {
           return originalQuery(parameters);
         };
       }
+
+      // Chrome runtime (used by extensions detection)
+      Object.defineProperty(window, "chrome", {
+        get: () => ({
+          runtime: {},
+          loadTimes: () => {},
+          csi: () => {},
+          app: {},
+        }),
+        configurable: true,
+      });
+
+      // Plugins
+      Object.defineProperty(navigator, "plugins", {
+        get: () => [
+          { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer", description: "Portable Document Format" },
+          { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai", description: "Portable Document Format" },
+          { name: "Native Client", filename: "internal-nacl-plugin", description: "Native Client Executable" },
+        ],
+        configurable: true,
+      });
+
+      // Languages
+      Object.defineProperty(navigator, "languages", {
+        get: () => ["en-US", "en"],
+        configurable: true,
+      });
+
+      // Screen
+      Object.defineProperty(screen, "colorDepth", { get: () => 24, configurable: true });
+      Object.defineProperty(screen, "pixelDepth", { get: () => 24, configurable: true });
+
+      // WebGL vendor/renderer
+      const getParameter = WebGLRenderingContext.prototype.getParameter;
+      WebGLRenderingContext.prototype.getParameter = function(parameter: number) {
+        if (parameter === 37445) return "Intel Inc."; // UNMASKED_VENDOR_WEBGL
+        if (parameter === 37446) return "Intel Iris OpenGL Engine"; // UNMASKED_RENDERER_WEBGL
+        return getParameter.call(this, parameter);
+      };
     }, this.config);
 
     // Block unnecessary resources to speed up
@@ -150,9 +198,9 @@ export class StealthBrowser {
     page.on("request", (req: any) => {
       const type = req.resourceType();
       const url = req.url();
-      // Block fonts, analytics, tracking, CSS (but allow images for poster detection)
+      // Allow images (for poster detection), but block fonts, CSS, analytics, tracking
       if (
-        ["font", "stylesheet", "image", "media", "websocket", "manifest", "other"].includes(type) &&
+        ["font", "stylesheet", "media", "websocket", "manifest", "other"].includes(type) &&
         !url.includes(".m3u8") &&
         !url.includes("mpegurl")
       ) {
@@ -219,8 +267,9 @@ export async function humanClick(page: Page, selector: string, options: { retrie
 
       if (!bounds) continue;
 
-      // Human-like mouse movement
-      await page.mouse.move(bounds.x, bounds.y, { steps: Math.floor(Math.random() * 20) + 10 });
+      // Human-like mouse movement with random steps
+      const steps = Math.floor(Math.random() * 20) + 10;
+      await page.mouse.move(bounds.x, bounds.y, { steps });
       await humanWait(100, 300);
 
       // Click with slight offset

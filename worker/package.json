@@ -20,9 +20,6 @@
     "wrangler": "4.114.0"
   },
   "dependencies": {
-    "@cloudflare/puppeteer": "^1.4.0",
-    "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
-    "puppeteer-extra-plugin-anonymize-ua": "^2.4.6"
+    "@cloudflare/puppeteer": "^1.4.0"
   }
 }

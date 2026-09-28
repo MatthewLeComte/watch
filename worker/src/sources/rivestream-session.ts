@@ -133,15 +133,20 @@ export async function applySessionToPage(page: Page, session: RiveStreamSession)
  */
 export async function extractSessionFromPage(page: Page, tmdbId: number, mediaType: "movie" | "tv"): Promise<RiveStreamSession> {
   const cookies = await page.cookies();
-  const localStorage = await page.evaluate(() => {
-    const data: Record<string, string> = {};
-    const ls = window.localStorage;
-    for (let i = 0; i < ls.length; i++) {
-      const key = ls.key(i);
-      if (key) data[key] = ls.getItem(key) || "";
-    }
-    return data;
-  });
+  let localStorage: Record<string, string> = {};
+  try {
+    localStorage = await page.evaluate(() => {
+      const data: Record<string, string> = {};
+      const ls = window.localStorage;
+      for (let i = 0; i < ls.length; i++) {
+        const key = ls.key(i);
+        if (key) data[key] = ls.getItem(key) || "";
+      }
+      return data;
+    });
+  } catch (e) {
+    console.log(JSON.stringify({ event: "rivestream_localstorage_error", error: String(e) }));
+  }
   const userAgent = await page.evaluate(() => navigator.userAgent);
 
   return {

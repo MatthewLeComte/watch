@@ -147,7 +147,7 @@ export const sourceMeta: Source = {
     const pageUrl = mediaType === "tv"
       ? `https://www.rivestream.app/watch?type=tv&id=${tmdbId}&season=${season}&episode=${episode}`
       : `https://www.rivestream.app/watch?type=movie&id=${tmdbId}`;
-    const browserResult = await extractHlsFromRiveStream(env, pageUrl);
+    const browserResult = await extractHlsFromRiveStream(env, pageUrl, tmdbId, mediaType);
     if (!browserResult) return null;
 
     const aired = detail.release_date || detail.first_air_date;

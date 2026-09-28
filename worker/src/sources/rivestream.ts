@@ -357,6 +357,7 @@ export async function extractHlsFromRiveStream(
       const type = (res.headers()["content-type"] || "").toLowerCase();
       if (url.includes(".m3u8") || type.includes("mpegurl")) {
         playlists.add(url);
+        console.log(JSON.stringify({ event: "rivestream_playlist_found", url }));
       }
       const skip = /fonts\.|gstatic|googletagmanager|cloudflareinsights|tmdb\.org|wtfismyip|_next\/|speculation|\.css(\?|$)/.test(url);
       if (!skip && interesting.length < 20) interesting.push(url.slice(0, 160));
@@ -380,7 +381,9 @@ export async function extractHlsFromRiveStream(
     });
 
     // Navigate with human-like timing
+    console.log(JSON.stringify({ event: "rivestream_navigate_start", pageUrl }));
     await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+    console.log(JSON.stringify({ event: "rivestream_navigate_done", pageUrl }));
     await humanWait(1000, 2500); // Think time
 
     // Check for challenge page
@@ -397,14 +400,44 @@ export async function extractHlsFromRiveStream(
       console.log(JSON.stringify({ event: "rivestream_challenge", tmdbId, mediaType, url: pageUrl }));
       // Wait longer for challenge to potentially auto-solve
       await humanWait(5000, 8000);
+    } else {
+      console.log(JSON.stringify({ event: "rivestream_no_challenge", pageUrl }));
     }
 
     // Scroll a bit (human behavior)
     await page.evaluate(() => window.scrollBy(0, 300));
     await humanWait(500, 1000);
 
-    // Try to click play
-    await tryClickPlay(page);
+    // Try to click play - handle potential navigation
+    console.log(JSON.stringify({ event: "rivestream_click_play_start" }));
+    let currentPage = page;
+    try {
+      // Wait for potential navigation after click
+      const navigationPromise = currentPage.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
+      await tryClickPlay(currentPage);
+      await navigationPromise;
+      // If navigation occurred, get the new page
+      const pages = await currentPage.browser().pages();
+      currentPage = pages[pages.length - 1];
+      // Re-attach listeners to new page
+      currentPage.on("response", handleResponse);
+      currentPage.on("framecreated", (frame: any) => {
+        frame.on("response", handleResponse);
+      });
+      currentPage.on("websocket", (ws: any) => {
+        ws.on("framereceived", ({ payload }: any) => {
+          if (payload.includes(".m3u8") || payload.includes("mpegurl")) {
+            try {
+              const urls = payload.match(/https?:\/\/[^\s"']+\.m3u8[^\s"']*/g) || [];
+              urls.forEach((u: string) => playlists.add(u));
+            } catch {}
+          }
+        });
+      });
+      console.log(JSON.stringify({ event: "rivestream_click_play_done", newUrl: currentPage.url() }));
+    } catch (e) {
+      console.log(JSON.stringify({ event: "rivestream_click_error", error: String(e) }));
+    }
 
     // Wait for playlist with deadline
     const deadline = Date.now() + 15000; // 15s max wait
@@ -415,11 +448,13 @@ export async function extractHlsFromRiveStream(
     const hlsUrl = await bestMasterUrl([...playlists]);
     if (!hlsUrl) {
       const title = await page.title().catch(() => "");
+      const html = await page.content().catch(() => "").then(c => c.slice(0, 2000));
       console.log(JSON.stringify({
         event: "rivestream_no_playlist",
         tmdbId,
         mediaType,
         title,
+        htmlPreview: html,
         interesting: interesting.slice(0, 10)
       }));
       throw new Error("no_playlist");
