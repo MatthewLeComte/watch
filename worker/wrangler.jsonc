@@ -18,8 +18,8 @@
   "kv_namespaces": [
     {
       "binding": "RIVESTREAM_SESSION",
-      "id": "rivestream-session-prod",
-      "preview_id": "rivestream-session-dev"
+      "id": "004d17dd5922456c81faf58e87af6313",
+      "preview_id": "5879db9d70dd420a8434871229438920"
     }
   ],
   "stream": { "binding": "STREAM" },
