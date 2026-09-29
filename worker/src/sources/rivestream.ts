@@ -8,13 +8,29 @@ import { StealthBrowser, humanWait, tryClickPlay } from "./rivestream-browser";
 import { getSession, saveSession, extractSessionFromPage, formatCookiesForPlayback, applySessionToPage, RiveStreamSession } from "./rivestream-session";
 import type { KVNamespace } from "@cloudflare/workers-types";
 
+async function secretText(value: string | { get?: () => Promise<string> } | undefined): Promise<string> {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  try { return (await value.get?.()) || ""; } catch { return ""; }
+}
+
+async function getTmdbApiKey(env: Env): Promise<string> {
+  const key = await secretText(env.WATCH_TMDB_API_KEY);
+  return key;
+}
+
+async function getTmdbBearer(env: Env): Promise<string> {
+  const bearer = await secretText(env.WATCH_TMDB_API_READ_ACCESS_TOKEN);
+  return bearer;
+}
+
 const BASE = "https://www.rivestream.app";
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const TMDB_IMAGE = "https://image.tmdb.org/t/p/w500";
 
-function getTmdbHeaders(env: Env): HeadersInit {
-  const bearer = env.WATCH_TMDB_API_READ_ACCESS_TOKEN;
-  const apiKey = env.WATCH_TMDB_API_KEY;
+async function getTmdbHeaders(env: Env): Promise<HeadersInit> {
+  const bearer = await getTmdbBearer(env);
+  const apiKey = await getTmdbApiKey(env);
   if (bearer) {
     return { Authorization: `Bearer ${bearer}`, Accept: "application/json" };
   }
@@ -24,8 +40,8 @@ function getTmdbHeaders(env: Env): HeadersInit {
   return { Accept: "application/json" };
 }
 
-function getTmdbApiKeyParam(env: Env): string | null {
-  const apiKey = env.WATCH_TMDB_API_KEY;
+async function getTmdbApiKeyParam(env: Env): Promise<string | null> {
+  const apiKey = await getTmdbApiKey(env);
   return apiKey ? `api_key=${apiKey}` : null;
 }
 
@@ -41,14 +57,15 @@ export const sourceRiveStream: Source = {
   name: "RiveStream (TMDB + Headless)",
 
   async search(query: string, env: Env): Promise<SearchResult[]> {
-    const apiKeyParam = getTmdbApiKeyParam(env);
+    const apiKeyParam = await getTmdbApiKeyParam(env);
     if (!apiKeyParam) return [];
     
+    const headers = await getTmdbHeaders(env);
     const [movieRes, tvRes] = await Promise.all([
       fetch(`${TMDB_BASE}/search/movie?${apiKeyParam}&query=${encodeURIComponent(query)}&language=en-US&include_adult=false`, 
-        { headers: { ...getTmdbHeaders(env), "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) }),
+        { headers: { ...headers, "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) }),
       fetch(`${TMDB_BASE}/search/tv?${apiKeyParam}&query=${encodeURIComponent(query)}&language=en-US&include_adult=false`, 
-        { headers: { ...getTmdbHeaders(env), "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) })
+        { headers: { ...headers, "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) })
     ]);
 
     const results: SearchResult[] = [];
@@ -81,10 +98,11 @@ export const sourceRiveStream: Source = {
   },
 
   async searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null> {
-    const apiKeyParam = getTmdbApiKeyParam(env);
+    const apiKeyParam = await getTmdbApiKeyParam(env);
     if (!apiKeyParam) return null;
+    const headers = await getTmdbHeaders(env);
     const url = `${TMDB_BASE}/find/${imdbId}?${apiKeyParam}&external_source=imdb_id`;
-    const res = await fetch(url, { headers: { ...getTmdbHeaders(env), "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+    const res = await fetch(url, { headers: { ...headers, "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return null;
     const data = await res.json() as { movie_results?: any[]; tv_results?: any[] };
     const movie = data.movie_results?.[0];
@@ -107,17 +125,37 @@ export const sourceRiveStream: Source = {
     const tmdbId = Number(parts[1]);
     if (!tmdbId || !["movie", "tv"].includes(mediaType)) return null;
 
-    const apiKeyParam = getTmdbApiKeyParam(env);
+    const apiKeyParam = await getTmdbApiKeyParam(env);
     if (!apiKeyParam) return null;
+    const headers = await getTmdbHeaders(env);
     const detailUrl = `${TMDB_BASE}/${mediaType}/${tmdbId}?${apiKeyParam}&language=en-US&append_to_response=external_ids`;
-    const res = await fetch(detailUrl, { headers: { ...getTmdbHeaders(env), "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
+    const res = await fetch(detailUrl, { headers: { ...headers, "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return null;
     const detail = await res.json() as any;
 
     const imdbId = detail.external_ids?.imdb_id || null;
 
-    const pageUrl = buildRiveStreamUrl(tmdbId, mediaType, mediaType === "tv" ? 1 : undefined, mediaType === "tv" ? 1 : undefined);
+    // Try providers API directly (no headless browser needed)
+    console.log(JSON.stringify({ event: "rivestream_resolve_start", tmdbId, mediaType }));
+    const providerResult = await tryProvidersAPI(tmdbId, mediaType);
+    console.log(JSON.stringify({ event: "rivestream_providers_result", tmdbId, hasResult: !!providerResult }));
+    if (providerResult) {
+      return {
+        id,
+        title: providerResult.title || detail.name || detail.title,
+        year: providerResult.year ?? (detail.release_date || detail.first_air_date ? Number((detail.release_date || detail.first_air_date).slice(0, 4)) : null),
+        imdbId,
+        poster: providerResult.poster ?? (detail.poster_path ? `${TMDB_IMAGE}${detail.poster_path}` : null),
+        hlsUrl: providerResult.hlsUrl,
+        qualities: providerResult.qualities,
+        subtitles: providerResult.subtitles,
+        cookieHeader: providerResult.cookieHeader,
+      };
+    }
 
+    // Fallback: headless browser (for providers not in API)
+    console.log(JSON.stringify({ event: "rivestream_fallback_headless", tmdbId }));
+    const pageUrl = buildRiveStreamUrl(tmdbId, mediaType, mediaType === "tv" ? 1 : undefined, mediaType === "tv" ? 1 : undefined);
     const browserResult = await extractHlsFromRiveStream(env, pageUrl, tmdbId, mediaType);
     if (!browserResult) return null;
 
@@ -130,7 +168,6 @@ export const sourceRiveStream: Source = {
       hlsUrl: browserResult.hlsUrl,
       qualities: browserResult.qualities,
       subtitles: browserResult.subtitles,
-      // Pass cookies for Roku playback
       cookieHeader: browserResult.cookieHeader,
     };
   },
@@ -303,12 +340,90 @@ async function bestMasterUrl(urls: string[]): Promise<string | null> {
   }
   return best?.url ?? urls[0] ?? null;
 }
-
+ 
 function parseMediaPlaylist(text: string, baseUrl: string): string[] {
   return text.split("\n")
     .map(l => l.trim())
     .filter(l => l && !l.startsWith("#"))
     .map(l => l.startsWith("http") ? l : new URL(l, baseUrl).href);
+}
+ 
+async function tryProvidersAPI(
+  tmdbId: number,
+  mediaType: "movie" | "tv"
+): Promise<{
+  hlsUrl: string;
+  qualities: Quality[];
+  subtitles: SubtitleTrack[];
+  title: string;
+  year: number | null;
+  poster: string | null;
+  cookieHeader: string;
+  httpHeaders?: Record<string, string>;
+} | null> {
+  const providers = [
+    "vanguard", "aura", "apogee", "primevids", "citadel", "optic", "asiacloud",
+    "tampa", "meridian", "savannah", "hector", "pyro", "borealis",
+    "quasar", "solstice", "primevids", "citadel", "apollo", "optic", "asiacloud"
+  ];
+
+  for (const provider of providers) {
+    try {
+      const providerUrl = `https://www.rivestream.app/api/backendfetch?requestID=movieVideoProvider&id=${tmdbId}&service=${provider}&secretKey=LTZmMzMzMjM5&proxyMode=undefined`;
+      const res = await fetch(providerUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(5000) });
+      if (!res.ok) continue;
+      const text = await res.text();
+      if (!text || text.includes("null") || text.length < 20) continue;
+
+      const data = JSON.parse(text);
+      if (!data.data || !data.data.sources?.length) continue;
+
+      // Get the best quality source
+      const sources = data.data.sources;
+      const bestSource = sources.reduce((best: any, s: any) => {
+        if (!best) return s;
+        const qualityOrder = { "4K HDR": 5, "1080p": 4, "720p": 3, "480p": 2, "HLS": 1, "ipcloud": 1 };
+        const bestScore = qualityOrder[best.quality as keyof typeof qualityOrder] || 0;
+        const currScore = qualityOrder[s.quality as keyof typeof qualityOrder] || 0;
+        return currScore > bestScore ? s : best;
+      });
+
+      if (!bestSource?.url) continue;
+
+      // Extract headers from the URL if present
+      let httpHeaders: Record<string, string> = {};
+      let cleanUrl = bestSource.url;
+      const headerMatch = bestSource.url.match(/[?&]headers=([^&]+)/);
+      if (headerMatch) {
+        try {
+          const headers = JSON.parse(decodeURIComponent(headerMatch[1]));
+          httpHeaders = headers;
+        } catch {}
+        // Remove headers from URL
+        cleanUrl = bestSource.url.replace(/[?&]headers=[^&]*/, '');
+        if (cleanUrl.endsWith('?') || cleanUrl.endsWith('&')) {
+          cleanUrl = cleanUrl.slice(0, -1);
+        }
+      }
+
+      // Return the best source with its headers - don't test the stream
+      // The Roku player will handle the actual streaming with the headers
+      return {
+        hlsUrl: cleanUrl,
+        qualities: [], // Will be parsed by player
+        subtitles: [],
+        title: "",
+        year: null,
+        poster: null,
+        cookieHeader: "",
+        httpHeaders: Object.keys(httpHeaders).length > 0 ? httpHeaders : undefined,
+      };
+    } catch (err) {
+      // Try next provider
+      continue;
+    }
+  }
+  return null;
 }
 
 export async function extractHlsFromRiveStream(
@@ -493,4 +608,4 @@ export async function extractHlsFromRiveStream(
   } finally {
     await stealthBrowser.close();
   }
-}
+}// test
