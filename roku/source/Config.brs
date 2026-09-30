@@ -12,7 +12,7 @@ function CatalogUrl() as String
 end function
 
 function MediaUrlFor(itemId as String) as String
-  return ApiBase() + "/v1/items/" + itemId + "/index.m3u8"
+  return ApiBase() + "/v1/items/" + itemId + "/media"
 end function
 
 function CacheTtlSec() as Integer

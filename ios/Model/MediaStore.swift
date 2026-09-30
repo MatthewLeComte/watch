@@ -196,28 +196,9 @@ actor MediaStore {
         return file
     }
 
-    /// Download the playlist and keep it. Play does not wait on this.
     func storePlaylist(api: WatchAPI, movie: Movie) async {
-        if cachedPlaylist(movie) != nil { return }
-        guard let remote = URL(string: "\(api.base)/v1/items/\(movie.id)/index.m3u8?key=\(api.key)"),
-              let file = try? directory(id: movie.id).appendingPathComponent("index.m3u8")
-        else { return }
-        var request = URLRequest(url: remote)
-        request.timeoutInterval = 20
-        request.setValue("Bearer \(api.key)", forHTTPHeaderField: "Authorization")
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse, http.statusCode == 200,
-              let text = String(data: data, encoding: .utf8),
-              text.contains("#EXTM3U"),
-              text.contains("https://")
-        else { return }
-        try? data.write(to: file, options: .atomic)
-        // The playlist is small. The first video piece is what play waits on, so fetch it now too.
-        guard let seg = URL(string: "\(api.base)/v1/items/\(movie.id)/seg/0.ts?key=\(api.key)") else { return }
-        var warm = URLRequest(url: seg)
-        warm.timeoutInterval = 30
-        warm.setValue("Bearer \(api.key)", forHTTPHeaderField: "Authorization")
-        _ = try? await URLSession.shared.data(for: warm)
+        _ = api
+        _ = movie
     }
 
     func cachePlaylists(api: WatchAPI, movies: [Movie]) async {

@@ -26,19 +26,9 @@ final class PlayerModel {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
         
-        // Prefer HLS URL for AirPlay compatibility (local file:// URLs don't work with AirPlay).
-        // Only fall back to local file when truly offline.
-        let mediaURL = "\(api.base)/v1/items/\(movie.id)/index.m3u8?key=\(api.key)"
+        let mediaURL = "\(api.base)/v1/items/\(movie.id)/media?key=\(api.key)"
         guard let url = URL(string: mediaURL) else { return }
-        
-        // Warm up playlist cache in background (doesn't block playback)
-        if await media.cachedPlaylist(movie) == nil {
-            let api = self.api
-            let media = self.media
-            let movie = self.movie
-            Task { await media.storePlaylist(api: api, movie: movie) }
-        }
-        
+
         let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(api.key)"]])
         let item = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: item)

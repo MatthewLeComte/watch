@@ -26,7 +26,7 @@ sub OnStart()
   m.player.visible = false
   m.loading.visible = true
   m.player.httpHeaders = AuthHeaders()
-  m.player.streamFormat = "hls"
+  m.player.streamFormat = "mp4"
   m.player.url = url
   m.player.control = "play"
 end sub

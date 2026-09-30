@@ -1,7 +1,6 @@
 import { cinemetaMeta } from "./cinemeta";
 import type { Env } from "./env";
 import { ingest, saveCache } from "./ingest";
-import { muxSegment, planSegments, playlist, segmentSpan, shiftPlan } from "./hls";
 import { contentTypeFor, edgeCache, extOf, parseByteRange, parseReleaseName, srtToVtt } from "./lib";
 import { handleWatchMcp } from "./mcp";
 import { SOURCES, listSources } from "./sources";
@@ -88,21 +87,6 @@ export default {
       const id = asset[1]!;
       const kind = asset[2]!.toLowerCase();
       return kind === "poster" ? posterAsset(env, id, request) : backdropAsset(env, id, request);
-    }
-    const hlsPlaylist = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/index\.m3u8$/i);
-    if (hlsPlaylist && request.method === "GET") {
-      if (!(await streamAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
-      return hlsIndex(request, env, hlsPlaylist[1]!);
-    }
-    const hlsSeg = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/seg\/(\d+)\.ts$/i);
-    if (hlsSeg && request.method === "GET") {
-      if (!(await streamAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
-      return hlsSegment(env, hlsSeg[1]!, Number(hlsSeg[2]));
-    }
-    const trick = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/trick\.bif$/i);
-    if (trick && request.method === "GET") {
-      if (!(await streamAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
-      return trickBif(env, trick[1]!);
     }
     const publicMedia = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/media$/i);
     if (publicMedia && (request.method === "GET" || request.method === "HEAD")) {
@@ -298,128 +282,6 @@ async function libraryRoutes(request: Request, env: Env, path: string): Promise<
   if (sub && request.method === "GET") return subtitle(env, id, sub[1]!);
   if (sub && request.method === "PUT") return putSubtitle(request, env, id, sub[1]!);
   return json({ error: "not_found" }, 404);
-}
-
-async function streamAuthorized(request: Request, env: Env): Promise<boolean> {
-  if (authorized(request, env.WATCH_KEY || "") || queryKey(request, env)) return true;
-  return rokuAuthorized(request, env);
-}
-
-const hlsPlans = new Map<string, ReturnType<typeof planSegments>>();
-const hlsPlanOrder: string[] = [];
-const hlsPlanFlight = new Map<string, Promise<ReturnType<typeof planSegments> | null>>();
-
-async function moviePrefix(env: Env, id: string): Promise<Uint8Array | null> {
-  const head = await rangedGet(env, id, 0, 65536);
-  if (!head) return null;
-  const buf = new Uint8Array(await head.arrayBuffer());
-  if (buf.length < 16 || String.fromCharCode(...buf.subarray(4, 8)) !== "ftyp") return null;
-  const ftyp = (buf[0]! << 24) | (buf[1]! << 16) | (buf[2]! << 8) | buf[3]!;
-  if (ftyp + 8 > buf.length) return null;
-  const moov = (buf[ftyp]! << 24) | (buf[ftyp + 1]! << 16) | (buf[ftyp + 2]! << 8) | buf[ftyp + 3]!;
-  const need = ftyp + moov;
-  if (need <= buf.length) return buf.subarray(0, need);
-  if (need > 16 * 1024 * 1024) return null;
-  const full = await rangedGet(env, id, 0, need);
-  if (!full) return null;
-  return new Uint8Array(await full.arrayBuffer());
-}
-
-function rememberPlans(id: string, plans: ReturnType<typeof planSegments>) {
-  const existing = hlsPlanOrder.indexOf(id);
-  if (existing >= 0) hlsPlanOrder.splice(existing, 1);
-  hlsPlanOrder.push(id);
-  hlsPlans.set(id, plans);
-  while (hlsPlanOrder.length > 24) {
-    const old = hlsPlanOrder.shift();
-    if (old) hlsPlans.delete(old);
-  }
-}
-
-async function plansFor(env: Env, id: string) {
-  const hit = hlsPlans.get(id);
-  if (hit) {
-    rememberPlans(id, hit);
-    return hit;
-  }
-  const flight = hlsPlanFlight.get(id);
-  if (flight) return flight;
-  const pending = (async () => {
-    const prefix = await moviePrefix(env, id);
-    if (!prefix) return null;
-    const plans = planSegments(prefix);
-    if (plans.length === 0) return null;
-    rememberPlans(id, plans);
-    return plans;
-  })();
-  hlsPlanFlight.set(id, pending);
-  try {
-    return await pending;
-  } finally {
-    hlsPlanFlight.delete(id);
-  }
-}
-
-async function hlsIndex(request: Request, env: Env, id: string): Promise<Response> {
-  const url = new URL(request.url);
-  const key = url.searchParams.get("key");
-  const q = key ? `?key=${encodeURIComponent(key)}` : "";
-  const cacheKey = new Request(`https://watch.internal/hls/${id}/index.m3u8${q}`);
-  const cached = await edgeCache().match(cacheKey);
-  if (cached) {
-    return new Response(cached.body, {
-      headers: {
-        "content-type": "application/vnd.apple.mpegurl",
-        "cache-control": "public, max-age=86400",
-      },
-    });
-  }
-  const plans = await plansFor(env, id);
-  if (!plans) return json({ error: "not_playable" }, 404);
-  const body = playlist(plans, (n) => `${url.origin}/v1/items/${id}/seg/${n}.ts${q}`);
-  const response = new Response(body, {
-    headers: {
-      "content-type": "application/vnd.apple.mpegurl",
-      "cache-control": "public, max-age=86400",
-    },
-  });
-  await edgeCache().put(cacheKey, response.clone());
-  return response;
-}
-
-async function hlsSegment(env: Env, id: string, n: number): Promise<Response> {
-  const cacheKey = new Request(`https://watch.internal/hls/${id}/seg/${n}.ts`);
-  const cached = await edgeCache().match(cacheKey);
-  if (cached) {
-    return new Response(cached.body, {
-      headers: { "content-type": "video/mp2t", "cache-control": "public, max-age=86400" },
-    });
-  }
-  const plans = await plansFor(env, id);
-  const plan = plans?.[n];
-  if (!plan) return json({ error: "not_found" }, 404);
-  const span = segmentSpan(plan);
-  if (!span) return json({ error: "segment_too_large" }, 416);
-  const obj = await rangedGet(env, id, span.offset, span.length);
-  if (!obj) return json({ error: "missing_object" }, 404);
-  const bytes = new Uint8Array(await obj.arrayBuffer());
-  const ts = muxSegment(bytes, shiftPlan(plan, span.offset));
-  const response = new Response(ts, {
-    headers: { "content-type": "video/mp2t", "cache-control": "public, max-age=86400" },
-  });
-  await edgeCache().put(cacheKey, response.clone());
-  return response;
-}
-
-async function trickBif(env: Env, id: string): Promise<Response> {
-  const obj = await env.watch_bucket.get(`bif/${id}.bif`);
-  if (!obj) return json({ error: "no_bif" }, 404);
-  return new Response(obj.body, {
-    headers: {
-      "content-type": "application/octet-stream",
-      "cache-control": "public, max-age=86400",
-    },
-  });
 }
 
 function authorized(request: Request, key: string): boolean {
