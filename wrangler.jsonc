@@ -1,0 +1,63 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "watch",
+  "main": "worker/src/worker.ts",
+  "compatibility_date": "2026-09-21",
+  "account_id": "ad27c69f849db0d1d354ce488d0b3ae6",
+  "workers_dev": false,
+  "preview_urls": false,
+  "build": {
+    "command": "npm ci --prefix worker && npm run typecheck --prefix worker && npm exec --prefix worker -- wrangler d1 migrations apply watch --remote --config wrangler.jsonc",
+    "watch_dir": "worker/src"
+  },
+  "observability": { "enabled": true },
+  "triggers": { "crons": ["* * * * *"] },
+  "routes": [
+    { "pattern": "watch.cornerstonecoatings.com", "custom_domain": true }
+  ],
+  "vars": {
+    "WATCH_KEY": "a68596aee3429a00eea168ccc408af7f00235119bfce7e07152f92013cecc164"
+  },
+  "stream": { "binding": "STREAM" },
+  "queues": {
+    "producers": [{ "binding": "HLS_SAVE_QUEUE", "queue": "hls-save" }],
+    "consumers": [{ "queue": "hls-save", "max_batch_size": 5, "max_retries": 3 }]
+  },
+  "secrets_store_secrets": [
+    {
+      "binding": "WATCH_PUBLIC_KEY",
+      "secret_name": "WATCH_PUBLIC_KEY",
+      "store_id": "0837aceaf29e426aa377a4728cc6db7a"
+    },
+    {
+      "binding": "WATCH_PRIVATE_KEY",
+      "secret_name": "WATCH_PRIVATE_KEY",
+      "store_id": "0837aceaf29e426aa377a4728cc6db7a"
+    },
+    {
+      "binding": "WATCH_TMDB_API_KEY",
+      "secret_name": "WATCH_TMDB_API_KEY",
+      "store_id": "0837aceaf29e426aa377a4728cc6db7a"
+    },
+    {
+      "binding": "WATCH_TMDB_API_READ_ACCESS_TOKEN",
+      "secret_name": "WATCH_TMDB_API_READ_ACCESS_TOKEN",
+      "store_id": "0837aceaf29e426aa377a4728cc6db7a"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "watch",
+      "database_name": "watch",
+      "database_id": "2d26cd1f-e8e9-41fc-a17f-e36106702537",
+      "migrations_dir": "worker/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "watch_bucket",
+      "bucket_name": "watch"
+    }
+  ],
+  "media": { "binding": "MEDIA" }
+}
