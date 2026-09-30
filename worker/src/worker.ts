@@ -2,7 +2,7 @@ import { cinemetaMeta } from "./cinemeta";
 import type { Env } from "./env";
 import { ingest, saveCache } from "./ingest";
 import { muxSegment, planSegments, playlist, segmentSpan, shiftPlan } from "./hls";
-import { contentTypeFor, extOf, parseByteRange, parseReleaseName, srtToVtt } from "./lib";
+import { contentTypeFor, edgeCache, extOf, parseByteRange, parseReleaseName, srtToVtt } from "./lib";
 import { handleWatchMcp } from "./mcp";
 import { SOURCES, listSources } from "./sources";
 import { handleRelayPl, handleRelaySeg, handleRelaySave, handleRelaySaveStatus, handleHlsServe, handleSaveBatch, type SaveMessage } from "./relay";
@@ -155,7 +155,7 @@ export default {
       const tmdbId = Number(tvMatch[1]);
       const season = tvMatch[2] ? Number(tvMatch[2]) : null;
       const cacheKey = new Request(`https://watch.cornerstonecoatings.com/v1/sources/tv/${tmdbId}${season == null ? "" : `/season/${season}`}`);
-      const cached = await caches.default.match(cacheKey);
+      const cached = await edgeCache().match(cacheKey);
       if (cached) return cached;
       try {
         const meta = SOURCES.get("meta");
@@ -164,7 +164,7 @@ export default {
           : { episodes: await meta?.episodes?.(env, tmdbId, season) ?? [] };
         const response = json(body);
         response.headers.set("cache-control", "public, max-age=3600");
-        await caches.default.put(cacheKey, response.clone());
+        await edgeCache().put(cacheKey, response.clone());
         return response;
       } catch (err) {
         if (err instanceof TmdbUnconfigured) return json({ error: "tmdb_unconfigured" }, 503);
@@ -190,11 +190,11 @@ export default {
         if (!q) return json({ error: "query_required" }, 400);
         const normalized = q.trim().toLowerCase();
         const cacheKey = new Request(`https://watch.cornerstonecoatings.com/v1/sources/search?q=${encodeURIComponent(normalized)}&source=${sourceKey}`);
-        const cached = await caches.default.match(cacheKey);
+        const cached = await edgeCache().match(cacheKey);
         if (cached) return cached;
         const response = json(await source.search(q, env));
         response.headers.set("cache-control", "public, max-age=300");
-        await caches.default.put(cacheKey, response.clone());
+        await edgeCache().put(cacheKey, response.clone());
         return response;
       } catch (err) {
         if (err instanceof TmdbUnconfigured) return json({ error: "tmdb_unconfigured" }, 503);
@@ -365,7 +365,7 @@ async function hlsIndex(request: Request, env: Env, id: string): Promise<Respons
   const key = url.searchParams.get("key");
   const q = key ? `?key=${encodeURIComponent(key)}` : "";
   const cacheKey = new Request(`https://watch.internal/hls/${id}/index.m3u8${q}`);
-  const cached = await caches.default.match(cacheKey);
+  const cached = await edgeCache().match(cacheKey);
   if (cached) {
     return new Response(cached.body, {
       headers: {
@@ -383,13 +383,13 @@ async function hlsIndex(request: Request, env: Env, id: string): Promise<Respons
       "cache-control": "public, max-age=86400",
     },
   });
-  await caches.default.put(cacheKey, response.clone());
+  await edgeCache().put(cacheKey, response.clone());
   return response;
 }
 
 async function hlsSegment(env: Env, id: string, n: number): Promise<Response> {
   const cacheKey = new Request(`https://watch.internal/hls/${id}/seg/${n}.ts`);
-  const cached = await caches.default.match(cacheKey);
+  const cached = await edgeCache().match(cacheKey);
   if (cached) {
     return new Response(cached.body, {
       headers: { "content-type": "video/mp2t", "cache-control": "public, max-age=86400" },
@@ -407,7 +407,7 @@ async function hlsSegment(env: Env, id: string, n: number): Promise<Response> {
   const response = new Response(ts, {
     headers: { "content-type": "video/mp2t", "cache-control": "public, max-age=86400" },
   });
-  await caches.default.put(cacheKey, response.clone());
+  await edgeCache().put(cacheKey, response.clone());
   return response;
 }
 
@@ -488,7 +488,7 @@ async function rokuSecrets(env: Env): Promise<RokuSecrets | null> {
   }
 }
 
-function hexToBytes(hex: string): Uint8Array {
+function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
     bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);

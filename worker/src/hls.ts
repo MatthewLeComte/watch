@@ -82,7 +82,7 @@ export function playlist(plans: SegmentPlan[], segmentUrl: (n: number) => string
   return lines.join("\n") + "\n";
 }
 
-export function muxSegment(file: Uint8Array, plan: SegmentPlan): Uint8Array {
+export function muxSegment(file: Uint8Array, plan: SegmentPlan): Uint8Array<ArrayBuffer> {
   const packets: Uint8Array[] = [];
   const cc = { pat: 0, pmt: 0, v: 0, a: 0 };
   const pcr = to90(plan.video[0]!.dts, plan.videoScale);
@@ -293,7 +293,7 @@ function payloadPacket(
   return pkt;
 }
 
-function concat(parts: Uint8Array[]): Uint8Array {
+function concat(parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
   let n = 0;
   for (const p of parts) n += p.length;
   const out = new Uint8Array(n);

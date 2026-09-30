@@ -7,6 +7,7 @@
  */
 
 import type { Env } from "./env";
+import { edgeCache } from "./lib.ts";
 
 const UA = "Watch/1";
 
@@ -116,7 +117,7 @@ export async function handleRelaySeg(request: Request): Promise<Response> {
   const referer = url.searchParams.get("ref");
   if (!upstream || bad(upstream)) return json({ error: "bad_url" }, 400);
   const cacheKey = new Request(`https://watch.internal/relay/seg?u=${encodeURIComponent(upstream)}`);
-  const cached = await caches.default.match(cacheKey);
+  const cached = await edgeCache().match(cacheKey);
   if (cached) return cached;
   const res = await fetch(upstream, {
     headers: relayHeaders(referer),
@@ -129,7 +130,7 @@ export async function handleRelaySeg(request: Request): Promise<Response> {
       "cache-control": "public, max-age=86400",
     },
   });
-  await caches.default.put(cacheKey, out.clone());
+  await edgeCache().put(cacheKey, out.clone());
   return out;
 }
 

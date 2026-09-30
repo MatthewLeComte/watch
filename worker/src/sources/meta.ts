@@ -6,6 +6,7 @@
  */
 
 import type { Env } from "../env";
+import { edgeCache } from "../lib.ts";
 import { Source, type SearchResult, type StreamInfo } from "./index";
 import { buildEmbedUrls } from "./rivestream";
 
@@ -43,12 +44,12 @@ async function tmdbFetch(env: Env, pathAndQuery: string): Promise<Response> {
     throw new TmdbUnconfigured();
   }
   const cacheKey = new Request(`https://tmdb-cache.watch.internal${pathAndQuery}`);
-  const hit = await caches.default.match(cacheKey);
+  const hit = await edgeCache().match(cacheKey);
   if (hit) return hit;
   const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
   if (res.ok) {
     const stored = new Response(res.clone().body, { status: res.status, headers: { "content-type": "application/json", "cache-control": "public, max-age=600" } });
-    await caches.default.put(cacheKey, stored);
+    await edgeCache().put(cacheKey, stored);
   }
   return res;
 }

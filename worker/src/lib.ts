@@ -1,5 +1,11 @@
 /** Pure ingest helpers. No network. No second pass. */
 
+/** Runtime default cache. Typed explicitly: the DOM lib's CacheStorage
+ *  shadows the Workers runtime type, which does have `default`. */
+export function edgeCache(): Cache {
+  return (caches as unknown as { default: Cache }).default;
+}
+
 export type TrailerVideo = {
   youtube_video_id?: string;
   language?: string;
