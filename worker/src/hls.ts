@@ -33,11 +33,14 @@ export function planSegments(mp4: Uint8Array): SegmentPlan[] {
   const video = tracks.find((t) => t.kind === "vide");
   const audio = tracks.find((t) => t.kind === "soun");
   if (!video || video.samples.length === 0 || video.timescale <= 0) return [];
-  const sync = video.sync.length > 0 ? video.sync : video.samples.map((_, i) => i);
+  const starts = segmentStarts(video);
   const plans: SegmentPlan[] = [];
-  for (let s = 0; s < sync.length; s++) {
-    const from = sync[s]!;
-    const to = s + 1 < sync.length ? sync[s + 1]! : video.samples.length;
+  const audioSamples = audio?.samples ?? [];
+  const audioScale = audio?.timescale || video.timescale;
+  let ai = 0;
+  for (let s = 0; s < starts.length; s++) {
+    const from = starts[s]!;
+    const to = s + 1 < starts.length ? starts[s + 1]! : video.samples.length;
     const v = video.samples.slice(from, to);
     if (v.length === 0) continue;
     const t0 = v[0]!.dts / video.timescale;
@@ -46,10 +49,14 @@ export function planSegments(mp4: Uint8Array): SegmentPlan[] {
     const prev = v.length > 1 ? v[v.length - 2]! : null;
     const lastDur = next ? next.dts - last.dts : prev ? last.dts - prev.dts : Math.round(video.timescale / 24);
     const t1 = (last.dts + lastDur) / video.timescale;
-    const a = audio ? audio.samples.filter((x) => {
-      const sec = x.dts / audio.timescale;
-      return sec >= t0 - 0.001 && sec < t1 - 0.001;
-    }) : [];
+    while (ai < audioSamples.length && audioSamples[ai]!.dts / audioScale < t0 - 0.001) ai++;
+    const a: Sample[] = [];
+    let aj = ai;
+    while (aj < audioSamples.length && audioSamples[aj]!.dts / audioScale < t1 - 0.001) {
+      a.push(audioSamples[aj]!);
+      aj++;
+    }
+    ai = aj;
     plans.push({
       duration: Math.max(0.001, t1 - t0),
       videoScale: video.timescale,
@@ -63,6 +70,38 @@ export function planSegments(mp4: Uint8Array): SegmentPlan[] {
     });
   }
   return plans;
+}
+
+// A missing or per-frame sync table used to emit one segment per sample.
+// That allocated until the isolate hit the memory limit on index.m3u8.
+const MAX_SEGMENTS = 4000;
+const MIN_GAP_SEC = 2;
+
+function segmentStarts(video: Track): number[] {
+  const sync = video.sync;
+  if (sync.length > 0 && sync.length <= MAX_SEGMENTS) return sync;
+  const scale = video.timescale;
+  const samples = video.samples;
+  const marks = sync.length > 0 ? sync : null;
+  const n = marks ? marks.length : samples.length;
+  const first = samples[marks ? marks[0]! : 0];
+  const lastIdx = marks ? marks[n - 1]! : n - 1;
+  const last = samples[lastIdx];
+  const dur = first && last ? Math.max(0, (last.dts - first.dts) / scale) : 0;
+  const gap = Math.max(MIN_GAP_SEC, dur / MAX_SEGMENTS);
+  const starts: number[] = [];
+  let lastT = -1e9;
+  for (let i = 0; i < n; i++) {
+    const idx = marks ? marks[i]! : i;
+    const sample = samples[idx];
+    if (!sample) continue;
+    const t = sample.dts / scale;
+    if (starts.length === 0 || t - lastT >= gap) {
+      starts.push(idx);
+      lastT = t;
+    }
+  }
+  return starts;
 }
 
 export function playlist(plans: SegmentPlan[], segmentUrl: (n: number) => string): string {
@@ -330,6 +369,7 @@ function parseTracks(mp4: Uint8Array): Track[] {
     const ctts = findChild(mp4, stbl.body, stbl.end, "ctts");
     if (!stts || !stsc || !stsz || !stco) continue;
     const sizes = readSizes(mp4, stsz);
+    if (sizes.length > 1_500_000) continue;
     const chunks = readChunks(mp4, stco);
     const sc = readStsc(mp4, stsc);
     const durations = readStts(mp4, stts);
