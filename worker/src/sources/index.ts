@@ -1,7 +1,11 @@
-/** Generic source interface for HLS-based movie sources. */
+/** Generic source interface: TMDB metadata in, documented Rive embed links out.
+ *
+ * Per worker/RIVESTREAM_EMBED_DOCS.md the worker never extracts HLS and never
+ * downloads video bytes. It resolves a TMDB id to documented embed URLs and
+ * the client (WKWebView hook on iOS) captures the playlist itself.
+ */
 
 import type { Env } from "../env";
-import { parseReleaseName } from "../lib";
 
 export type SearchResult = {
   id: string;
@@ -20,10 +24,20 @@ export type StreamInfo = {
   year: number | null;
   imdbId: string | null;
   poster: string | null;
+  /** Documented default embed page. The client loads this and captures HLS. */
   hlsUrl: string;
+  /** Same as hlsUrl, named honestly. */
+  embedUrl: string;
+  /** Documented variants from /embed/docs. */
+  torrentUrl: string;
+  aggUrl: string;
+  downloadUrl: string;
+  /** Always empty: the worker does not extract variants. The client picks. */
   qualities: Quality[];
+  /** Always empty: the worker does not extract subtitles. The client picks. */
   subtitles: SubtitleTrack[];
-  cookieHeader?: string; // For Roku Video node HttpHeaders
+  cookieHeader?: string;
+  httpHeaders?: Record<string, string>;
 };
 
 export type Quality = {
@@ -41,12 +55,11 @@ export type SubtitleTrack = {
 };
 
 export interface Source {
-  readonly key: string;           // e.g., "67movies"
-  readonly name: string;          // Display name
+  readonly key: string;
+  readonly name: string;
   search(query: string, env: Env): Promise<SearchResult[]>;
   searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null>;
   resolve(env: Env, id: string): Promise<StreamInfo | null>;
-  downloadAndIngest(env: Env, stream: StreamInfo, quality: Quality, subtitle?: SubtitleTrack): Promise<string>;
   seasons?(env: Env, tmdbId: number): Promise<{ number: number; name: string; episodeCount: number }[]>;
   episodes?(env: Env, tmdbId: number, season: number): Promise<{ number: number; name: string }[]>;
 }

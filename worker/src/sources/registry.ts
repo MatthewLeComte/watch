@@ -1,4 +1,4 @@
-/** Source registry - only working sources. */
+/** Source registry - documented sources only: TMDB metadata + Rive embed links. */
 
 import { registerSource } from "./index";
 import { sourceRiveStream } from "./rivestream";
@@ -6,4 +6,3 @@ import { sourceMeta } from "./meta";
 
 registerSource(sourceRiveStream);
 registerSource(sourceMeta);
-// Only RiveStream + Meta (RiveStream) are working sources

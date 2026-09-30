@@ -4,7 +4,8 @@ import { ingest, saveCache } from "./ingest";
 import { muxSegment, planSegments, playlist, segmentSpan, shiftPlan } from "./hls";
 import { contentTypeFor, extOf, parseByteRange, parseReleaseName, srtToVtt } from "./lib";
 import { handleWatchMcp } from "./mcp";
-import { SOURCES, listSources, type SearchResult, type StreamInfo, type Quality, type SubtitleTrack } from "./sources";
+import { SOURCES, listSources } from "./sources";
+import { handleRelayPl, handleRelaySeg, handleRelaySave, handleRelaySaveStatus, handleHlsServe, handleSaveBatch, type SaveMessage } from "./relay";
 import { TmdbUnconfigured } from "./sources/meta";
 import "./sources/registry";
 
@@ -57,6 +58,16 @@ type SubRow = {
 };
 
 export default {
+  async queue(batch: MessageBatch, env: Env): Promise<void> {
+    for (const msg of batch.messages) {
+      try {
+        await handleSaveBatch(msg.body as SaveMessage, env);
+      } catch (err) {
+        console.log(JSON.stringify({ event: "hls_save_batch_error", error: String(err).slice(0, 200) }));
+        throw err;
+      }
+    }
+  },
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -208,62 +219,52 @@ export default {
       }
     }
 
-    // GET /v1/sources/meta/download/:tmdbId — direct file stream (auto-best quality)
-    // Supports movie: /v1/sources/meta/download/27205
-    // Supports TV:   /v1/sources/meta/download/60625?season=1&episode=1
-    // Auth: Bearer or ?key= (same as library)
-    const directDownload = path.match(/^\/(?:api|v1)\/sources\/meta\/download\/(\d+)\/?$/i);
-    if (directDownload && request.method === "GET") {
+    // GET /v1/relay/pl?u={upstream_m3u8}&ref={embed_page} — rewritten playlist.
+    // GET /v1/relay/seg?u={upstream_seg}&ref={embed_page} — proxied bytes.
+    // The capturing client hands over the playlist URL it found on the
+    // documented embed page. Auth: Bearer or ?key= (same as library).
+    if ((path === "/v1/relay/pl" || path === "/v1/relay/seg") && request.method === "GET") {
       if (!libraryAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
-      const tmdbId = Number(directDownload[1]!);
-      const url = new URL(request.url);
-      const season = url.searchParams.get("season") ? Number(url.searchParams.get("season")!) : 1;
-      const episode = url.searchParams.get("episode") ? Number(url.searchParams.get("episode")!) : 1;
-      const meta = SOURCES.get("meta");
-      if (!meta) return json({ error: "source_not_found" }, 404);
       try {
-        const id = season > 1 || episode > 1 ? `meta:tv:${tmdbId}:${season}:${episode}` : `meta:${tmdbId}`;
-        const stream = await meta.resolve(env, id);
-        if (!stream) return json({ error: "not_found" }, 404);
-        // Auto-best quality: highest height, then highest bandwidth
-        const bestQuality = stream.qualities.reduce((best, q) =>
-          !best || q.height > best.height || (q.height === best.height && q.bandwidth > best.bandwidth) ? q : best
-        );
-        if (!bestQuality) return json({ error: "no_quality" }, 500);
-        // Proxy the variant playlist as a direct stream (segments proxied through worker)
-        const baseUrl = stream.hlsUrl.substring(0, stream.hlsUrl.lastIndexOf("/") + 1);
-        const variantUrl = bestQuality.uri.startsWith("http") ? bestQuality.uri : baseUrl + bestQuality.uri;
-        return proxyHlsVariant(env, variantUrl, request, stream.title, stream.contentType || "video/mp4");
+        return path === "/v1/relay/pl" ? await handleRelayPl(request) : await handleRelaySeg(request);
       } catch (err) {
-        if (err instanceof TmdbUnconfigured) return json({ error: "tmdb_unconfigured" }, 503);
-        const message = err instanceof Error ? err.message : "download_failed";
-        return json({ error: message }, 500);
+        const message = err instanceof Error ? err.message : "relay_failed";
+        return json({ error: message }, 502);
       }
     }
 
-    // All below require Ed25519 auth
+    // POST /v1/relay/save {playlistUrl, referer, tmdbId, mediaType, season, episode}
+    // — fan out a chunked persist job (1080p-sane picker). Bearer or ?key=.
+    if (path === "/v1/relay/save" && request.method === "POST") {
+      if (!libraryAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
+      try {
+        return await handleRelaySave(request, env);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "save_failed";
+        return json({ error: message }, 502);
+      }
+    }
+
+    // GET /v1/relay/save/:jobId — persist job status.
+    const saveStatus = path.match(/^\/v1\/relay\/save\/([0-9a-f-]{36})\/?$/i);
+    if (saveStatus && request.method === "GET") {
+      if (!libraryAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
+      return handleRelaySaveStatus(env, saveStatus[1]!);
+    }
+
+    // GET /v1/hls/:jobId/... — serve persisted chunks.
+    const hlsServe = path.match(/^\/v1\/hls\/([0-9a-f-]{36})\/(.+)$/i);
+    if (hlsServe && request.method === "GET") {
+      if (!libraryAuthorized(request, env)) return json({ error: "unauthorized" }, 401);
+      return handleHlsServe(env, hlsServe[1]!, hlsServe[2]!, request);
+    }
+
+    // All below require Ed25519 auth. No worker-side downloads: the worker
+    // resolves TMDB ids to documented Rive embed links and the client
+    // captures playback itself.
     if (!(await sourceAuthorized(request, env))) return json({ error: "unauthorized" }, 401);
 
-    try {
-      // POST /api/sources/meta/download - download + ingest
-      const downloadMatch = path.match(/^\/api\/sources\/meta\/download\/?$/i);
-      if (downloadMatch && request.method === "POST") {
-        const source = SOURCES.get("meta");
-        if (!source) return json({ error: "source_not_found" }, 404);
-        const body = (await request.json()) as { stream: StreamInfo; quality?: { height: number }; subtitleLang?: string };
-        const stream = body.stream;
-        if (!stream?.hlsUrl) return json({ error: "stream_required" }, 400);
-        const quality = stream.qualities.find(q => q.height === (body.quality?.height ?? stream.qualities[0]?.height)) ?? stream.qualities[0];
-        const subtitle = body.subtitleLang ? stream.subtitles.find(s => s.lang === body.subtitleLang) : undefined;
-        const id = await source.downloadAndIngest(env, stream, quality, subtitle);
-        return json({ id }, 201);
-      }
-
-      return json({ error: "not_found" }, 404);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "failed";
-      return json({ error: message }, 500);
-    }
+    return json({ error: "not_found" }, 404);
   },
 } satisfies ExportedHandler<Env>;
 
@@ -545,61 +546,6 @@ function queryKey(request: Request, env: Env): boolean {
   if (!env.WATCH_KEY) return false;
   const got = new URL(request.url).searchParams.get("key") || "";
   return constantTimeEqual(got, env.WATCH_KEY);
-}
-
-async function proxyHlsVariant(
-  env: Env,
-  variantUrl: string,
-  request: Request,
-  title: string,
-  contentType: string
-): Promise<Response> {
-  // Fetch the variant playlist
-  const variantRes = await fetch(variantUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
-  if (!variantRes.ok) return json({ error: "variant_fetch_failed" }, 502);
-  const variantText = await variantRes.text();
-
-  // Parse segment URLs
-  const baseUrl = variantUrl.substring(0, variantUrl.lastIndexOf("/") + 1);
-  const segmentUrls = variantText
-    .split("\n")
-    .map(l => l.trim())
-    .filter(l => l && !l.startsWith("#"))
-    .map(l => l.startsWith("http") ? l : new URL(l, baseUrl).href);
-
-  if (segmentUrls.length === 0) return json({ error: "no_segments" }, 500);
-
-  // Stream segments concatenated as raw MPEG-TS (single file stream)
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      for (const segUrl of segmentUrls) {
-        try {
-          const segRes = await fetch(segUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(15000) });
-          if (!segRes.ok || !segRes.body) continue;
-          const reader = segRes.body.getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            controller.enqueue(value);
-          }
-        } catch {
-          // Skip failed segment, continue
-        }
-      }
-      controller.close();
-    }
-  });
-
-  const safeTitle = title.replace(/[^a-z0-9]/gi, "_").slice(0, 100);
-  return new Response(stream, {
-    headers: {
-      "content-type": contentType,
-      "content-disposition": `attachment; filename="${safeTitle}.ts"`,
-      "cache-control": "private, no-store",
-      "accept-ranges": "none",
-    },
-  });
 }
 
 function json(data: unknown, status = 200, extra?: HeadersInit): Response {

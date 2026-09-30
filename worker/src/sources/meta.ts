@@ -1,8 +1,13 @@
-/** Meta-source: RiveStream only (TMDB ID → HLS via headless). */
+/** Meta-source: TMDB metadata in, documented Rive embed links out.
+ *
+ * TMDB supplies search, seasons, episodes, and detail. Rive supplies nothing
+ * but the documented embed page (worker/RIVESTREAM_EMBED_DOCS.md), which the
+ * client loads and captures the playlist from itself.
+ */
 
 import type { Env } from "../env";
-import { parseReleaseName } from "../lib";
-import { Source, type SearchResult, type StreamInfo, type Quality, type SubtitleTrack } from "./index";
+import { Source, type SearchResult, type StreamInfo } from "./index";
+import { buildEmbedUrls } from "./rivestream";
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const TMDB_IMAGE = "https://image.tmdb.org/t/p/w500";
@@ -143,13 +148,7 @@ export const sourceMeta: Source = {
     if (!res.ok) return null;
     const detail = await res.json() as { title?: string; name?: string; release_date?: string; first_air_date?: string; poster_path?: string | null; external_ids?: { imdb_id?: string } };
 
-    const { extractHlsFromRiveStream } = await import("./rivestream");
-    const pageUrl = mediaType === "tv"
-      ? `https://www.rivestream.app/watch?type=tv&id=${tmdbId}&season=${season}&episode=${episode}`
-      : `https://www.rivestream.app/watch?type=movie&id=${tmdbId}`;
-    const browserResult = await extractHlsFromRiveStream(env, pageUrl, tmdbId, mediaType);
-    if (!browserResult) return null;
-
+    const links = buildEmbedUrls(tmdbId, mediaType, season, episode);
     const aired = detail.release_date || detail.first_air_date;
     const title = mediaType === "tv" ? `${detail.name || "Episode"} S${season}E${episode}` : (detail.title || "");
     return {
@@ -158,88 +157,10 @@ export const sourceMeta: Source = {
       year: aired ? Number(aired.slice(0, 4)) : null,
       imdbId: detail.external_ids?.imdb_id ?? null,
       poster: detail.poster_path ? `${TMDB_IMAGE}${detail.poster_path}` : null,
-      hlsUrl: browserResult.hlsUrl,
-      qualities: browserResult.qualities,
-      subtitles: browserResult.subtitles,
+      hlsUrl: links.embedUrl,
+      ...links,
+      qualities: [],
+      subtitles: [],
     };
-  },
-
-  async downloadAndIngest(
-    env: Env,
-    stream: StreamInfo,
-    quality: Quality,
-    subtitle?: SubtitleTrack,
-  ): Promise<string> {
-    const hlsRes = await fetch(stream.hlsUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(30000) });
-    if (!hlsRes.ok || !hlsRes.body) throw new Error("hls_fetch_failed");
-
-    const masterText = await hlsRes.text();
-    const { qualities, subtitles } = parseMasterPlaylist(masterText, stream.hlsUrl);
-    const selectedQuality = qualities.find(q => q.height === quality.height)
-      || qualities.reduce<Quality | undefined>((best, q) => (!best || q.height > best.height || (q.height === best.height && q.bandwidth > best.bandwidth) ? q : best), undefined);
-    if (!selectedQuality) throw new Error("no_quality");
-
-    const baseUrl = stream.hlsUrl.substring(0, stream.hlsUrl.lastIndexOf("/") + 1);
-    const variantUrl = selectedQuality.uri.startsWith("http") ? selectedQuality.uri : baseUrl + selectedQuality.uri;
-    const variantRes = await fetch(variantUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(10000) });
-    if (!variantRes.ok) throw new Error("variant_fetch_failed");
-    const variantText = await variantRes.text();
-    const segmentUrls = parseMediaPlaylist(variantText, variantUrl.substring(0, variantUrl.lastIndexOf("/") + 1));
-    if (segmentUrls.length === 0) throw new Error("no_segments");
-
-    const parsed = parseReleaseName(`${stream.title} ${stream.year ?? ""}.mp4`);
-    const id = crypto.randomUUID();
-    const now = new Date().toISOString();
-
-    await env.watch.prepare(
-      `INSERT INTO movie (id, filename, byte_size, content_type, ext, title, original_title, year, status, created_at, updated_at)
-       VALUES (?, ?, 0, ?, ?, ?, ?, ?, 'uploading', ?, ?)`
-    ).bind(id, `${parsed.title}.mp4`, "video/mp4", "mp4", parsed.title, stream.title, stream.year, now, now).run();
-
-    const upload = await env.watch_bucket.createMultipartUpload(`video/${id}`, {
-      httpMetadata: { contentType: "video/mp4" },
-    });
-
-    let totalSize = 0;
-    let partNumber = 1;
-    let partBuffer = new Uint8Array(0);
-    const PART = 8 * 1024 * 1024;
-    const parts: { partNumber: number; etag: string }[] = [];
-
-    for (const segUrl of segmentUrls) {
-      const segRes = await fetch(segUrl, { headers: { "User-Agent": "Watch/1" }, signal: AbortSignal.timeout(15000) });
-      if (!segRes.ok || !segRes.body) continue;
-      const chunk = new Uint8Array(await segRes.arrayBuffer());
-      totalSize += chunk.length;
-
-      const newBuf = new Uint8Array(partBuffer.length + chunk.length);
-      newBuf.set(partBuffer);
-      newBuf.set(chunk, partBuffer.length);
-      partBuffer = newBuf;
-
-      if (partBuffer.length >= PART) {
-        const upPart = await upload.uploadPart(partNumber, partBuffer);
-        parts.push({ partNumber, etag: upPart.etag });
-        partNumber++;
-        partBuffer = new Uint8Array(0);
-      }
-    }
-
-    if (partBuffer.length > 0) {
-      const upPart = await upload.uploadPart(partNumber, partBuffer);
-      parts.push({ partNumber, etag: upPart.etag });
-    }
-
-    await env.watch.prepare("INSERT INTO upload (movie_id, upload_id, parts_json) VALUES (?, ?, ?)")
-      .bind(id, upload.uploadId, JSON.stringify(parts.map(p => ({ ...p, size: PART }))))
-      .run();
-
-    await env.watch.prepare("UPDATE movie SET byte_size = ? WHERE id = ?").bind(totalSize, id).run();
-    await completeHlsUpload(env, id, totalSize, parts.length);
-
-    const { ingest } = await import("../ingest");
-    await ingest(env, id);
-
-    return id;
   },
 };

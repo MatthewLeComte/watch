@@ -12,17 +12,13 @@
     { "pattern": "watch.cornerstonecoatings.com", "custom_domain": true }
   ],
   "vars": {
-    "WATCH_KEY": "a68596aee3429a00eea168ccc408af7f00235119bfce7e07152f92013cecc164",
-    "RIVESTREAM_PROXY": ""
+    "WATCH_KEY": "a7f3c91e4b82d05f6e1a9c8b3470d2ef"
   },
-  "kv_namespaces": [
-    {
-      "binding": "RIVESTREAM_SESSION",
-      "id": "004d17dd5922456c81faf58e87af6313",
-      "preview_id": "5879db9d70dd420a8434871229438920"
-    }
-  ],
   "stream": { "binding": "STREAM" },
+  "queues": {
+    "producers": [{ "binding": "HLS_SAVE_QUEUE", "queue": "hls-save" }],
+    "consumers": [{ "queue": "hls-save", "max_batch_size": 5, "max_retries": 3 }]
+  },
   "secrets_store_secrets": [
     {
       "binding": "WATCH_PUBLIC_KEY",
@@ -58,6 +54,5 @@
       "binding": "watch_bucket",
       "bucket_name": "watch"
     }
-  ],
-  "browser": { "binding": "BROWSER" }
+  ]
 }
