@@ -7,6 +7,7 @@ import { SOURCES, listSources } from "./sources";
 import { handleRelayPl, handleRelaySeg, handleRelaySave, handleRelaySaveStatus, handleHlsServe, handleSaveBatch, type SaveMessage } from "./relay";
 import { TmdbUnconfigured } from "./sources/meta";
 import "./sources/registry";
+import { checkUpload } from "./validate";
 
 /** R2 requires every part except the last to be at least 5 MiB. 8 MiB matches that rule. */
 const PART = 8 * 1024 * 1024;
@@ -501,7 +502,8 @@ async function saveStream(env: Env, id: string, video: StreamVideo, downloadUrl?
 
 export async function listItems(env: Env): Promise<Response> {
   await ensureTrailerSchema(env);
-  const rows = await env.watch.prepare("SELECT * FROM movie ORDER BY created_at DESC").all<MovieRow>();
+  // Only finished, validated titles are in the library; uploads in flight stay out of it.
+  const rows = await env.watch.prepare("SELECT * FROM movie WHERE status = 'ready' ORDER BY created_at DESC").all<MovieRow>();
   const subs = await env.watch.prepare("SELECT movie_id, lang, label, source, release_name, hearing_impaired FROM subtitle").all<
     SubRow & { movie_id: string }
   >();
@@ -595,6 +597,22 @@ async function completeItem(env: Env, id: string): Promise<Response> {
     parts.map((p) => ({ partNumber: p.partNumber, etag: p.etag })),
   );
   await env.watch.prepare("DELETE FROM upload WHERE movie_id = ?").bind(id).run();
+
+  // Gate: the stored object must match what was declared and look like a real video.
+  const meta = await env.watch
+    .prepare("SELECT ext, byte_size FROM movie WHERE id = ?")
+    .bind(id)
+    .first<{ ext: string; byte_size: number }>();
+  const stored = await env.watch_bucket.head(`video/${id}`);
+  const headObj = await env.watch_bucket.get(`video/${id}`, { range: { offset: 0, length: 16 } });
+  const head = new Uint8Array(headObj ? await headObj.arrayBuffer() : new ArrayBuffer(0));
+  const check = checkUpload({ ext: meta?.ext ?? "", declared: meta?.byte_size ?? 0, actual: stored?.size ?? 0, head });
+  console.log(JSON.stringify({ evt: "upload_check", id, ...(check.ok ? { ok: true, note: check.note } : { ok: false, reason: check.reason }) }));
+  if (!check.ok) {
+    await env.watch_bucket.delete([`video/${id}`]);
+    await env.watch.prepare("DELETE FROM movie WHERE id = ?").bind(id).run();
+    return json({ error: "invalid_video", reason: check.reason }, 422);
+  }
   try {
     await ingest(env, id);
     // Auto-resolve trailer in background (fire-and-forget)

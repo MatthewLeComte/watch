@@ -8,6 +8,7 @@
 
 import type { Env } from "./env";
 import { edgeCache } from "./lib.ts";
+import { checkSavedStream } from "./validate.ts";
 
 const UA = "Watch/1";
 
@@ -397,6 +398,23 @@ export async function handleSaveBatch(msg: SaveMessage, env: Env): Promise<void>
   await maybeFinalize(env, msg.jobId);
 }
 
+class SaveCheckError extends Error {}
+
+/** First 376 bytes of a saved segment: enough to see two MPEG-TS sync bytes. */
+async function sampleSegment(env: Env, key: string): Promise<Uint8Array | null> {
+  const obj = await env.watch_bucket.get(key, { range: { offset: 0, length: 376 } });
+  return obj ? new Uint8Array(await obj.arrayBuffer()) : null;
+}
+
+async function purgeJob(env: Env, jobId: string): Promise<void> {
+  let cursor: string | undefined;
+  do {
+    const page = await env.watch_bucket.list({ prefix: `hls/${jobId}/`, cursor, limit: 1000 });
+    if (page.objects.length) await env.watch_bucket.delete(page.objects.map((o) => o.key));
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+}
+
 async function maybeFinalize(env: Env, jobId: string): Promise<void> {
   const claim = await env.watch
     .prepare(
@@ -415,13 +433,29 @@ async function maybeFinalize(env: Env, jobId: string): Promise<void> {
   if (!job) return;
   try {
     const durations = JSON.parse(job.durations_json) as number[];
+    const prefix = `hls/${jobId}/${job.vheight}p`;
+    const durationSec = durations.reduce((a, b) => a + b, 0);
+    const [firstSegment, lastSegment, expectedSec] = await Promise.all([
+      sampleSegment(env, `${prefix}/${segName(0)}`),
+      sampleSegment(env, `${prefix}/${segName(durations.length - 1)}`),
+      tmdbRuntimeSec(env, job.media_type, job.tmdb_id),
+    ]);
+    const check = checkSavedStream({
+      mediaType: job.media_type, total: job.total, done: job.done, bytes: job.bytes,
+      durationSec, expectedSec, firstSegment, lastSegment,
+    });
+    console.log(JSON.stringify({
+      evt: "relay_save_check", jobId, tmdbId: job.tmdb_id, season: job.season, episode: job.episode,
+      durationSec: Math.round(durationSec), expectedSec, bytes: job.bytes,
+      ...(check.ok ? { ok: true, note: check.note } : { ok: false, reason: check.reason }),
+    }));
+    if (!check.ok) throw new SaveCheckError(check.reason);
     const lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:12", "#EXT-X-PLAYLIST-TYPE:VOD"];
     for (let i = 0; i < durations.length; i++) {
       lines.push(`#EXTINF:${(durations[i] ?? 6).toFixed(3)},`);
       lines.push(segName(i));
     }
     lines.push("#EXT-X-ENDLIST");
-    const prefix = `hls/${jobId}/${job.vheight}p`;
     await env.watch_bucket.put(`${prefix}/index.m3u8`, lines.join("\n") + "\n", {
       httpMetadata: { contentType: "application/vnd.apple.mpegurl" },
     });
@@ -437,13 +471,13 @@ async function maybeFinalize(env: Env, jobId: string): Promise<void> {
     await env.watch
       .prepare(
         `INSERT INTO movie (id, filename, byte_size, content_type, ext, title, original_title, year, status,
-          match_source, match_note, hls_url, created_at, updated_at)
-         VALUES (?, ?, ?, 'video/mp4', 'mp4', ?, ?, NULL, 'ready', 'rive-save', ?, ?, ?, ?)`,
+          match_source, match_note, runtime_min, hls_url, created_at, updated_at)
+         VALUES (?, ?, ?, 'video/mp4', 'mp4', ?, ?, NULL, 'ready', 'rive-save', ?, ?, ?, ?, ?)`,
       )
       .bind(
         movieId, `${label}.mp4`, job.bytes, label, label,
-        `Saved ${job.media_type} ${job.tmdb_id} S${job.season}E${job.episode} ${job.vheight}p`,
-        `/v1/hls/${jobId}/master.m3u8`, now, now,
+        `Saved ${job.media_type} ${job.tmdb_id} S${job.season}E${job.episode} ${job.vheight}p · ${check.note}`,
+        Math.round(durationSec / 60), `/v1/hls/${jobId}/master.m3u8`, now, now,
       )
       .run();
     await env.watch
@@ -452,6 +486,8 @@ async function maybeFinalize(env: Env, jobId: string): Promise<void> {
       .run();
   } catch (err) {
     const message = err instanceof Error ? err.message : "finalize_failed";
+    // A failed check means the saved chunks are not a title; drop them. Other errors may be transient.
+    if (err instanceof SaveCheckError) await purgeJob(env, jobId);
     await env.watch
       .prepare("UPDATE hls_job SET status = 'error', error = ?, updated_at = ? WHERE id = ?")
       .bind(message.slice(0, 500), new Date().toISOString(), jobId)
