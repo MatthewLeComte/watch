@@ -32,6 +32,9 @@ sub Init()
   m.loading = m.top.findNode("loading")
   m.loadTitle = m.top.findNode("loadTitle")
   m.loadText = m.top.findNode("loadText")
+  m.muteIcon = m.top.findNode("muteIcon")
+  m.muteRing = m.top.findNode("muteRing")
+  m.onMute = false
 
   m.player.visible = false
   m.player.ObserveField("state", "OnPlayerState")
@@ -60,6 +63,9 @@ sub Init()
   m.stopPending = false
   m.dots = 0
   m.reg = CreateObject("roRegistrySection", "WatchCache")
+  ' Trailers play with sound. Up past the top shelf reaches the Sound toggle; the choice is remembered.
+  m.muted = (m.reg.Read("heroMuted") = "1")
+  ShowMuteIcon()
 
   json = ReadChunks(m.reg, "catalog")
   if json <> invalid and type(json) = "String" and Len(json) > 0
@@ -214,7 +220,7 @@ sub StartHero(it as Object)
   content.url = base + "/trailer?key=" + apiKey
   content.streamFormat = "mp4"
   content.HttpHeaders = ["Authorization:Bearer " + apiKey]
-  m.hero.mute = true
+  m.hero.mute = m.muted
   m.hero.loop = true
   m.hero.content = content
   m.hero.control = "play"
@@ -235,6 +241,39 @@ sub StopHero()
   m.cues = []
   m.caption.text = ""
   m.capBg.visible = false
+end sub
+
+sub ShowMuteIcon()
+  if m.muted
+    m.muteIcon.uri = "pkg:/images/sound-off.png"
+  else
+    m.muteIcon.uri = "pkg:/images/sound-on.png"
+  end if
+end sub
+
+' Up from the top shelf reaches the speaker icon (a ring shows it has focus); OK toggles; down returns.
+sub FocusMute(on as Boolean)
+  m.onMute = on
+  m.muteRing.visible = on
+  if on
+    m.keyCatcher.visible = true
+    m.keyCatcher.SetFocus(true)
+  else
+    m.keyCatcher.visible = false
+    m.rows.SetFocus(true)
+  end if
+end sub
+
+sub OnMuteToggle()
+  m.muted = not m.muted
+  if m.muted
+    m.reg.Write("heroMuted", "1")
+  else
+    m.reg.Write("heroMuted", "0")
+  end if
+  m.reg.Flush()
+  m.hero.mute = m.muted
+  ShowMuteIcon()
 end sub
 
 sub OnCues()
@@ -338,6 +377,8 @@ sub StartPlayback(it as Object)
   print "Playing: " + it.itemId
   m.current = "starting"
   m.pending = it
+  m.onMute = false
+  m.muteRing.visible = false
   m.heroTimer.control = "stop"
   m.stopPending = false
   StopHero()
@@ -379,6 +420,8 @@ sub SetHomeLayers(on as Boolean)
   m.coverLeft.visible = on
   m.coverBottom.visible = on
   m.brand.visible = on
+  m.muteIcon.visible = on
+  m.muteRing.visible = on and m.onMute
   m.titleLabel.visible = on
   m.metaLabel.visible = on
   m.overviewLabel.visible = on
@@ -415,31 +458,15 @@ sub OnStartTimer()
   m.player.visible = true
   m.current = "player"
   m.player.control = "play"
-  ShowScrubBar()
-end sub
-
-sub ShowScrubBar()
-  bar = m.player.trickPlayBar
-  if bar = invalid then return
-  bar.visible = true
-end sub
-
-sub Scrub(dir as Integer)
-  at = m.player.position
-  if at = invalid then at = 0
-  at = at + dir
-  if at < 0 then at = 0
-  m.player.seek = at
-  m.player.control = "play"
-  ShowScrubBar()
+  ' The player itself takes focus so left/right/OK open its native seek bar, with BIF previews
+  m.player.SetFocus(true)
 end sub
 
 sub OnPlayerState()
   print "Player state: " + m.player.state
   if m.player.state = "playing" and m.current = "player"
     HideLoading()
-    m.keyCatcher.SetFocus(true)
-    ShowScrubBar()
+    m.player.SetFocus(true)
   end if
   if m.player.state = "finished"
     print "Player finished"
@@ -485,23 +512,25 @@ function OnKeyEvent(k, p) as Boolean
     ReturnHome()
     return true
   end if
-  if m.current = "player"
-    if k = "right" or k = "fastforward"
-      Scrub(1)
-      return true
-    end if
-    if k = "left" or k = "rewind"
-      Scrub(-1)
-      return true
-    end if
-    if k = "OK" or k = "play"
-      if m.player.state = "paused"
-        m.player.control = "resume"
-      else
-        m.player.control = "pause"
+  if m.current = "home"
+    ' Up from the top shelf reaches the Sound toggle; down comes back
+    if m.onMute
+      if k = "OK"
+        OnMuteToggle()
+        return true
       end if
-      ShowScrubBar()
+      if k = "down" or k = "back"
+        FocusMute(false)
+        return true
+      end if
       return true
+    end if
+    if k = "up" and m.rows.hasFocus()
+      at = m.rows.rowItemFocused
+      if at <> invalid and at[0] = 0
+        FocusMute(true)
+        return true
+      end if
     end if
   end if
   return false

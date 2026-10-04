@@ -14,9 +14,9 @@
       />
     <Video
       id="hero"
-      translation="[760, 0]"
-      width="1102"
-      height="620"
+      translation="[560, -95]"
+      width="1440"
+      height="810"
       enableUI="false"
       mute="true"
       loop="true"
@@ -111,6 +111,8 @@
       focusable="true"
       opacity="0"
       />
+    <Poster id="muteRing" translation="[1808, 34]" width="80" height="80" uri="pkg:/images/ring.png" visible="false" />
+    <Poster id="muteIcon" translation="[1816, 42]" width="64" height="64" uri="pkg:/images/sound-on.png" />
     <Group id="loading" visible="false">
       <Rectangle width="1920" height="1080" color="0x101012FF" />
       <Label
