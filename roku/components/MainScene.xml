@@ -59,4 +59,5 @@
       />
   </children>
   <script type="text/brightscript" uri="pkg:/source/MainScene.brs" />
+  <script type="text/brightscript" uri="pkg:/source/Config.brs" />
 </component>

@@ -99,6 +99,8 @@ function FetchCatalog() as Object
     gridItem.title = GridLabel(raw)
     gridItem.HDPosterUrl = ValidStr(raw.posterUrl)
     gridItem.itemId = ValidStr(raw.id)
+    ' Saved streams (rentals) play from this HLS playlist instead of /media
+    gridItem.itemHlsUrl = ValidStr(raw.hlsUrl)
     gridItem.itemTitle = ValidStr(raw.title)
     gridItem.year = SafeInt(raw.year)
     gridItem.overview = ValidStr(raw.overview)

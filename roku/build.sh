@@ -14,8 +14,8 @@ if [ -z "${WATCH_PUBLIC_KEY:-}" ] && [ -f ".env" ]; then
   set +a
 fi
 
-if [ -z "${WATCH_PUBLIC_KEY:-}" ] || [ -z "${WATCH_PRIVATE_KEY:-}" ]; then
-  echo "ERROR: WATCH_PUBLIC_KEY / WATCH_PRIVATE_KEY not set. Export them or create .env (see .env.example)."
+if [ -z "${WATCH_PUBLIC_KEY:-}" ] || [ -z "${WATCH_PRIVATE_KEY:-}" ] || [ -z "${WATCH_LIBRARY_KEY:-}" ]; then
+  echo "ERROR: WATCH_PUBLIC_KEY / WATCH_PRIVATE_KEY / WATCH_LIBRARY_KEY not set. Export them or create .env (see .env.example)."
   exit 1
 fi
 
@@ -33,6 +33,14 @@ assert src.count("__WATCH_PUBLIC_KEY__") == 1, "public key placeholder missing o
 assert src.count("__WATCH_PRIVATE_KEY__") == 1, "private key placeholder missing or duplicated"
 src = src.replace("__WATCH_PUBLIC_KEY__", pub).replace("__WATCH_PRIVATE_KEY__", priv)
 open(path, "w").write(src)
+EOF
+
+python3 - "$STAGE/source/Config.brs" "$WATCH_LIBRARY_KEY" <<'EOF'
+import sys
+path, key = sys.argv[1], sys.argv[2]
+src = open(path).read()
+assert src.count("__WATCH_LIBRARY_KEY__") == 1, "library key placeholder missing or duplicated"
+open(path, "w").write(src.replace("__WATCH_LIBRARY_KEY__", key))
 EOF
 
 rm -f app.zip

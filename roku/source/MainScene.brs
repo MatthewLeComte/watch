@@ -98,9 +98,18 @@ sub PlayDirectMedia(item as Object)
   if id = invalid then return
 
   content = CreateObject("roSGNode", "ContentNode")
-  content.url = "https://watch.cornerstonecoatings.com/v1/items/" + id + "/media"
   content.title = item.itemTitle
-  content.streamformat = "mp4"
+  hls = item.itemHlsUrl
+  if hls <> invalid and Left(hls, 8) = "/v1/hls/" then
+    ' Saved stream: HLS chunks in R2, no single file behind /media
+    content.url = "https://watch.cornerstonecoatings.com" + hls
+    content.streamformat = "hls"
+  else
+    content.url = "https://watch.cornerstonecoatings.com/v1/items/" + id + "/media"
+    content.streamformat = "mp4"
+  end if
+  ' The Video node sends these on every request, chunks included. Format is "name:value".
+  content.HttpHeaders = ["Authorization:Bearer " + LibraryKey()]
 
   m.playerStarted = false
   m.player.content = content

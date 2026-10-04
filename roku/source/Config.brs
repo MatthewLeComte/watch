@@ -15,6 +15,11 @@ function MediaUrlFor(itemId as String) as String
   return ApiBase() + "/v1/items/" + itemId + "/media"
 end function
 
+' Library key for the worker's Bearer-gated routes (saved-stream chunks, /media). Injected by build.sh.
+function LibraryKey() as String
+  return "__WATCH_LIBRARY_KEY__"
+end function
+
 function CacheTtlSec() as Integer
   return 300
 end function
