@@ -182,8 +182,8 @@ struct SourceSearchView: View {
 
 }
 
-/// The Rive page sorts its servers, then the playlist it requests is handed to
-/// AVAssetDownloadURLSession. That downloader keeps the highest-bandwidth variant.
+/// The Rive page sorts its servers; the first playlist it requests plays in the
+/// native player. Nothing is saved unless the user adds the title to the library.
 struct RiveCaptureView: View {
     let library: LibraryModel
     let result: SourceSearchResult
@@ -201,93 +201,126 @@ struct RiveCaptureView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var playlist: URL?
-    @State private var native = false
-    @State private var bufferMovie: Movie?
-    @State private var bufferTask: Task<URL?, Never>?
-    @State private var localPlay: URL?
-    @State private var bufferProgress: Double = 0
+    @State private var playing = false
     @State private var season = 1
     @State private var episode = 1
+    @State private var saveJob: RelaySaveJob?
+    @State private var saveTask: Task<Void, Never>?
+    @State private var saveError: String?
+    @State private var confirmSave = false
 
     private var isTV: Bool { result.type == "series" || result.id.hasPrefix("meta:tv:") }
+    private var saving: Bool { saveTask != nil }
+    private var saved: Bool { saveJob?.isDone == true }
 
     var body: some View {
         NavigationStack {
             ZStack {
-                if let url = pageURL() {
-                    RiveWebView(url: url) { found in
-                        guard playlist == nil else { return }
-                        playlist = found
-                        startBuffer()
-                        native = true
-                    }
-                    .id("\(season)-\(episode)")
-                    .opacity(0)
-                    .allowsHitTesting(false)
-                    .ignoresSafeArea(edges: .bottom)
-                } else {
-                    ContentUnavailableView("No TMDB id", systemImage: "film", description: Text(result.title))
-                }
                 if playlist == nil {
-                    ProgressView("Finding the stream")
-                        .tint(.white)
-                        .foregroundStyle(.white)
+                    if let url = pageURL() {
+                        RiveWebView(url: url) { found in
+                            guard playlist == nil else { return }
+                            playlist = found
+                            play(found)
+                        }
+                        .id("\(season)-\(episode)")
+                        .opacity(0)
+                        .allowsHitTesting(false)
+                        .ignoresSafeArea(edges: .bottom)
+                        ProgressView("Finding the stream")
+                            .tint(.white)
+                            .foregroundStyle(.white)
+                    } else {
+                        ContentUnavailableView("No TMDB id", systemImage: "film", description: Text(result.title))
+                    }
+                } else {
+                    ready
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.black)
             .navigationTitle(result.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        startBuffer()
-                    } label: {
-                        if bufferTask != nil, localPlay == nil {
-                            Text(bufferProgress > 0 ? "\(Int(bufferProgress * 100))%" : "…")
-                                .font(.caption.weight(.semibold))
-                        } else {
-                            Image(systemName: localPlay == nil ? "arrow.down.to.line" : "checkmark")
-                        }
-                    }
-                    .disabled(playlist == nil || localPlay != nil)
-                    .accessibilityLabel("Buffer on this device")
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        native = true
-                    } label: {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    }
-                    .disabled(playlist == nil)
-                    .accessibilityLabel("Play fullscreen on this device")
+                    Button("Close") { dismiss() }
                 }
             }
-            .fullScreenCover(isPresented: $native) {
-                if let playlist {
-                    NativeStreamScreen(
-                        url: localPlay ?? playlist,
-                        referer: pageURL()?.absoluteString,
-                        episodeLabel: isTV ? "S\(season) E\(episode)" : nil,
-                        onPrevious: isTV ? { shift(episode: -1) } : nil,
-                        onNext: isTV ? { shift(episode: 1) } : nil
-                    ) {
-                        await saveUnified()
-                    }
-                }
+            .confirmationDialog("Add to your library?", isPresented: $confirmSave, titleVisibility: .visible) {
+                Button("Add to Library") { startServerSave() }
+            } message: {
+                Text("Saves a permanent copy of \(heading) to your library.")
             }
-            .task(id: bufferMovie?.id) { await watchBuffer() }
         }
+    }
+
+    private var heading: String {
+        isTV ? "\(result.title) S\(season) E\(episode)" : result.title
+    }
+
+    private var ready: some View {
+        VStack(spacing: 20) {
+            VStack(spacing: 6) {
+                Text(result.title)
+                    .font(.title2.weight(.bold))
+                    .multilineTextAlignment(.center)
+                if isTV {
+                    Text("Season \(season) · Episode \(episode)")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+            Button { if let playlist { play(playlist) } } label: {
+                Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+
+            if isTV {
+                HStack(spacing: 12) {
+                    Button { shift(episode: -1) } label: {
+                        Label("Previous", systemImage: "backward.end.fill").frame(maxWidth: .infinity)
+                    }
+                    .disabled(season == 1 && episode == 1)
+                    Button { shift(episode: 1) } label: {
+                        Label("Next", systemImage: "forward.end.fill").frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+            }
+
+            Button { confirmSave = true } label: {
+                if let job = saveJob, !job.isDone {
+                    Label(job.progress > 0 ? "Saving \(Int(job.progress * 100))%" : "Saving", systemImage: "icloud.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                } else if saved {
+                    Label("In Your Library", systemImage: "checkmark").frame(maxWidth: .infinity)
+                } else {
+                    Label("Add to Library", systemImage: "icloud.and.arrow.up").frame(maxWidth: .infinity)
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .disabled(saving || saved)
+
+            if let saveError {
+                Text(saveError)
+                    .font(.footnote)
+                    .foregroundStyle(.yellow)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 32)
+        .frame(maxWidth: Cinema.playColumn)
     }
 
     private func pageURL() -> URL? {
         guard let tmdb = result.tmdbId else { return nil }
         if isTV {
-            return URL(string: "https://www.rivestream.app/watch?type=tv&id=\(tmdb)&season=\(season)&episode=\(episode)")
+            return URL(string: "https://www.rivestream.app/embed?type=tv&id=\(tmdb)&season=\(season)&episode=\(episode)")
         }
-        return URL(string: "https://www.rivestream.app/watch?type=movie&id=\(tmdb)")
+        return URL(string: "https://www.rivestream.app/embed?type=movie&id=\(tmdb)")
     }
 
     private func shift(episode delta: Int) {
@@ -299,152 +332,82 @@ struct RiveCaptureView: View {
         } else {
             episode = next
         }
-        bufferTask?.cancel()
-        bufferTask = nil
-        bufferMovie = nil
-        localPlay = nil
         playlist = nil
-        bufferProgress = 0
-        native = false
+        saveTask?.cancel()
+        saveTask = nil
+        saveJob = nil
+        saveError = nil
     }
 
-    private func watchBuffer() async {
-        while !Task.isCancelled, let id = bufferMovie?.id, localPlay == nil {
-            if let progress = await library.media.hlsDownloadProgress(id: id) {
-                bufferProgress = progress
-            }
-            try? await Task.sleep(for: .milliseconds(400))
-        }
-    }
+    /// Streams the playlist in the system player, so Done, transport, PiP and
+    /// AirPlay are all native and hide together. Done returns to this screen.
+    private func play(_ url: URL) {
+        guard !playing else { return }
+        playing = true
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        var headers = ["User-Agent": "Watch/1"]
+        if let referer = pageURL()?.absoluteString { headers["Referer"] = referer }
+        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
+        let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+        player.allowsExternalPlayback = true
 
-    private func startBuffer() {
-        guard bufferTask == nil, let playlist else { return }
-        let movie = localMovie(result, playlist: playlist)
-        bufferMovie = movie
-        let headers = pageURL().map { ["Referer": $0.absoluteString] } ?? [:]
-        bufferTask = Task {
-            let file = try? await library.media.downloadHLS(api: library.api, movie: movie, hlsURL: playlist, headers: headers)
-            localPlay = file
-            bufferProgress = file == nil ? bufferProgress : 1
-            return file
-        }
-    }
-
-    /// Waits for the on-device HLS package, then writes one mp4 from it.
-    private func saveUnified() async -> URL? {
-        startBuffer()
-        guard let movpkg = await bufferTask?.value else { return nil }
-        return try? await library.media.exportUnifiedVideo(movpkg: movpkg, name: result.title)
-    }
-
-}
-
-private struct NativeStreamScreen: View {
-    let url: URL
-    let referer: String?
-    var episodeLabel: String?
-    var onPrevious: (() -> Void)?
-    var onNext: (() -> Void)?
-    var onSave: () async -> URL?
-    @Environment(\.dismiss) private var dismiss
-    @State private var player = AVPlayer()
-    @State private var saving = false
-    @State private var savedFile: URL?
-    @State private var chrome = true
-    @State private var hideChrome: Task<Void, Never>?
-
-    var body: some View {
-        SystemPlayer(player: player)
-            .ignoresSafeArea()
-            .background(Color.black)
-            .overlay(alignment: .top) {
-                HStack(spacing: 12) {
-                    Button { dismiss() } label: { Image(systemName: "xmark") }
-                        .buttonStyle(.glass)
-                        .accessibilityLabel("Close")
-                    if let episodeLabel {
-                        Button { onPrevious?() } label: { Image(systemName: "backward.end.fill") }
-                            .buttonStyle(.glass)
-                            .disabled(onPrevious == nil)
-                        Text(episodeLabel)
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .glassEffect(.regular, in: Capsule())
-                        Button { onNext?() } label: { Image(systemName: "forward.end.fill") }
-                            .buttonStyle(.glass)
-                            .disabled(onNext == nil)
-                    }
-                    Button {
-                        saving = true
-                        Task {
-                            savedFile = await onSave()
-                            saving = false
-                        }
-                    } label: {
-                        if saving { ProgressView() } else { Image(systemName: savedFile == nil ? "square.and.arrow.down" : "checkmark") }
-                    }
-                    .buttonStyle(.glass)
-                    .disabled(saving)
-                    .accessibilityLabel("Save")
-                }
-                .padding(.top, 8)
-                .opacity(chrome ? 1 : 0)
-                .allowsHitTesting(chrome)
-                .animation(.easeInOut(duration: 0.25), value: chrome)
-            }
-            .simultaneousGesture(TapGesture().onEnded { reveal() })
-            .onAppear { reveal() }
-            .sheet(isPresented: Binding(get: { savedFile != nil }, set: { if !$0 { savedFile = nil } })) {
-                if let savedFile {
-                    ActivityShare(url: savedFile)
-                }
-            }
-            .onAppear {
-                var headers = ["User-Agent": "Watch/1"]
-                if let referer { headers["Referer"] = referer }
-                let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-                player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
-                player.play()
-            }
-            .onDisappear { player.pause() }
-    }
-
-    private func reveal() {
-        chrome = true
-        hideChrome?.cancel()
-        hideChrome = Task {
-            try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled else { return }
-            chrome = false
-        }
-    }
-}
-
-private struct SystemPlayer: UIViewControllerRepresentable {
-    let player: AVPlayer
-
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let vc = AVPlayerViewController()
+        let vc = DismissablePlayerVC()
         vc.player = player
-        vc.showsPlaybackControls = true
+        vc.modalPresentationStyle = .fullScreen
         vc.allowsPictureInPicturePlayback = true
         vc.updatesNowPlayingInfoCenter = true
-        vc.speeds = [AVPlaybackSpeed(rate: 1, localizedName: "1×")]
-        return vc
+        vc.onDone = {
+            player.pause()
+            playing = false
+        }
+        guard let top = topViewController() else {
+            playing = false
+            return
+        }
+        top.present(vc, animated: true) { player.play() }
     }
 
-    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
-        if vc.player !== player { vc.player = player }
+    /// Persist the captured playlist to R2 via the worker (chunked save), then
+    /// pull the new title into the library.
+    private func startServerSave() {
+        guard saveTask == nil, let playlist, let tmdb = result.tmdbId else { return }
+        saveError = nil
+        let referer = pageURL()
+        let mediaType = isTV ? "tv" : "movie"
+        let season = season
+        let episode = episode
+        let library = library
+        saveTask = Task {
+            do {
+                var job = try await library.relaySave(
+                    playlist: playlist, referer: referer,
+                    tmdbId: tmdb, mediaType: mediaType,
+                    season: season, episode: episode
+                )
+                saveJob = job
+                while !Task.isCancelled, !job.isDone, !job.isFailed {
+                    try? await Task.sleep(for: .seconds(2))
+                    guard !Task.isCancelled else { return }
+                    job = try await library.relaySaveStatus(id: job.id)
+                    saveJob = job
+                }
+                if job.isFailed {
+                    saveError = "Couldn't add to your library."
+                    saveJob = nil
+                } else if job.isDone {
+                    await library.refresh()
+                }
+            } catch {
+                if !Task.isCancelled {
+                    saveError = "Couldn't add to your library."
+                    saveJob = nil
+                }
+            }
+            saveTask = nil
+        }
     }
-}
 
-private struct ActivityShare: UIViewControllerRepresentable {
-    let url: URL
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: [url], applicationActivities: nil)
-    }
-    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
 private func rivePageURL(_ result: SourceSearchResult) -> URL? {
@@ -453,50 +416,9 @@ private func rivePageURL(_ result: SourceSearchResult) -> URL? {
         let parts = result.id.split(separator: ":")
         let season = parts.count > 3 ? parts[3] : "1"
         let episode = parts.count > 4 ? parts[4] : "1"
-        return URL(string: "https://www.rivestream.app/watch?type=tv&id=\(tmdb)&season=\(season)&episode=\(episode)")
+        return URL(string: "https://www.rivestream.app/embed?type=tv&id=\(tmdb)&season=\(season)&episode=\(episode)")
     }
-    return URL(string: "https://www.rivestream.app/watch?type=movie&id=\(tmdb)")
-}
-
-private func localMovie(_ result: SourceSearchResult, playlist: URL) -> Movie {
-    let now = ISO8601DateFormatter().string(from: Date())
-    return Movie(
-        id: UUID().uuidString,
-        filename: "\(result.title).movpkg",
-        byteSize: 0,
-        contentType: "application/vnd.apple.mpegurl",
-        ext: "movpkg",
-        title: result.title,
-        originalTitle: nil,
-        year: result.year,
-        overview: "",
-        runtimeMin: nil,
-        genres: [],
-        imdbId: result.imdbId,
-        tmdbId: result.tmdbId,
-        osHash: nil,
-        streamId: nil,
-        hlsUrl: playlist.absoluteString,
-        thumbnailUrl: result.poster,
-        downloadUrl: nil,
-        readyToStream: true,
-        posterUrl: result.poster,
-        backdropUrl: nil,
-        trailerSite: nil,
-        trailerKey: nil,
-        trailerUrl: nil,
-        trailer: nil,
-        trailerFileUrl: nil,
-        trailerFile: nil,
-        trailerCaptions: nil,
-        status: "ready",
-        matchSource: "rive",
-        matchP: nil,
-        matchNote: result.id,
-        subtitles: [],
-        createdAt: now,
-        updatedAt: now
-    )
+    return URL(string: "https://www.rivestream.app/embed?type=movie&id=\(tmdb)")
 }
 
 private func bestVariant(_ playlist: URL) async throws -> URL {
@@ -611,360 +533,5 @@ private struct RiveWebView: UIViewRepresentable {
                 DispatchQueue.main.async { self.onPlaylist(url) }
             }
         }
-    }
-}
-
-/// Resolve movie page → show qualities & subtitles.
-struct SourceResolveView: View {
-    let library: LibraryModel
-    let result: SourceSearchResult
-    let source: String
-    let onDownload: (SourceStreamInfo, SourceQuality, SourceSubtitle?) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var streamInfo: SourceStreamInfo?
-    @State private var resolving = true
-    @State private var error: String?
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
-
-                if resolving {
-                    VStack(spacing: 16) {
-                        ProgressView()
-                            .scaleEffect(1.5)
-                            .tint(.white)
-                        Text("Loading stream info…")
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
-                } else if let error {
-                    VStack(spacing: 16) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 40))
-                            .foregroundStyle(.yellow)
-                        Text(error)
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
-                        Button("Retry") { Task { await resolve() } }
-                            .buttonStyle(.borderedProminent)
-                    }
-                } else if let stream = streamInfo {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 20) {
-                            // Header
-                            HStack(spacing: 16) {
-                                AsyncImage(url: stream.poster.flatMap(URL.init)) { phase in
-                                    switch phase {
-                                    case .empty:
-                                        RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.1))
-                                    case .success(let img):
-                                        img.resizable().scaledToFill()
-                                    case .failure:
-                                        RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.1))
-                                            .overlay(Image(systemName: "film").foregroundStyle(.white.opacity(0.3)))
-                                    @unknown default:
-                                        EmptyView()
-                                    }
-                                }
-                                .frame(width: 100, height: 150)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(stream.title)
-                                        .font(.title2.weight(.bold))
-                                        .foregroundStyle(.white)
-                                    if let year = stream.year {
-                                        Text("\(year)")
-                                            .foregroundStyle(.white.opacity(0.7))
-                                    }
-                                    if let imdb = stream.imdbId {
-                                        Text(imdb)
-                                            .font(.caption)
-                                            .foregroundStyle(.white.opacity(0.5))
-                                    }
-                                }
-                            }
-
-                            // Qualities
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("Quality")
-                                    .font(.headline.weight(.bold))
-                                    .foregroundStyle(.white)
-
-                                ForEach(stream.qualities) { q in
-                                    Button {
-                                        onDownload(stream, q, nil)
-                                    } label: {
-                                        HStack {
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text("\(q.height)p")
-                                                    .font(.headline.weight(.semibold))
-                                                    .foregroundStyle(.white)
-                                                Text("\(q.bandwidth / 1_000_000) Mbps • \(q.codecs)")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.white.opacity(0.6))
-                                            }
-                                            Spacer()
-                                            Image(systemName: "chevron.right")
-                                                .foregroundStyle(.white.opacity(0.4))
-                                        }
-                                        .padding()
-                                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-
-                            // Subtitles
-                            if !stream.subtitles.isEmpty {
-                                VStack(alignment: .leading, spacing: 12) {
-                                    Text("Subtitles")
-                                        .font(.headline.weight(.bold))
-                                        .foregroundStyle(.white)
-
-                                    ForEach(stream.subtitles) { s in
-                                        Button {
-                                            onDownload(stream, stream.qualities.first!, s)
-                                        } label: {
-                                            HStack {
-                                                Text(s.label)
-                                                    .font(.headline.weight(.semibold))
-                                                    .foregroundStyle(.white)
-                                                if s.forced {
-                                                    Text("FORCED")
-                                                        .font(.caption2.weight(.bold))
-                                                        .padding(.horizontal, 6)
-                                                        .padding(.vertical, 2)
-                                                        .background(Cinema.red, in: Capsule())
-                                                }
-                                                Spacer()
-                                                Image(systemName: "chevron.right")
-                                                    .foregroundStyle(.white.opacity(0.4))
-                                            }
-                                            .padding()
-                                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-
-                                    // None option
-                                    Button {
-                                        onDownload(stream, stream.qualities.first!, nil)
-                                    } label: {
-                                        HStack {
-                                            Text("None")
-                                                .font(.headline.weight(.semibold))
-                                                .foregroundStyle(.white)
-                                            Spacer()
-                                            Image(systemName: "chevron.right")
-                                                .foregroundStyle(.white.opacity(0.4))
-                                        }
-                                        .padding()
-                                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                        .padding(20)
-                    }
-                }
-            }
-            .navigationTitle(result.displayTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
-            .task { await resolve() }
-        }
-    }
-
-    private func resolve() async {
-        resolving = true
-        error = nil
-        do {
-            streamInfo = try await library.sourceResolve(source: source, id: result.id)
-        } catch {
-            self.error = error.localizedDescription
-        }
-        resolving = false
-    }
-}
-
-/// Confirm download with quality & subtitle selection.
-struct SourceDownloadConfirmView: View {
-    let stream: SourceStreamInfo
-    let quality: SourceQuality
-    let subtitle: SourceSubtitle?
-    let onConfirm: (SourceQuality, SourceSubtitle?) -> Void
-    let onCancel: () -> Void
-
-    @State private var selectedQuality: SourceQuality
-    @State private var selectedSubtitle: SourceSubtitle?
-
-    init(stream: SourceStreamInfo, quality: SourceQuality, subtitle: SourceSubtitle?, onConfirm: @escaping (SourceQuality, SourceSubtitle?) -> Void, onCancel: @escaping () -> Void) {
-        self.stream = stream
-        self.quality = quality
-        self.subtitle = subtitle
-        self.onConfirm = onConfirm
-        self.onCancel = onCancel
-        self._selectedQuality = State(initialValue: quality)
-        self._selectedSubtitle = State(initialValue: subtitle)
-    }
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
-                        // Movie info
-                        HStack(spacing: 16) {
-                            AsyncImage(url: stream.poster.flatMap(URL.init)) { phase in
-                                switch phase {
-                                case .empty:
-                                    RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.1))
-                                case .success(let img):
-                                    img.resizable().scaledToFill()
-                                case .failure:
-                                    RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.1))
-                                        .overlay(Image(systemName: "film").foregroundStyle(.white.opacity(0.3)))
-                                @unknown default:
-                                    EmptyView()
-                                }
-                            }
-                            .frame(width: 80, height: 120)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(stream.title)
-                                    .font(.title2.weight(.bold))
-                                    .foregroundStyle(.white)
-                                if let year = stream.year {
-                                    Text("\(year)")
-                                        .foregroundStyle(.white.opacity(0.7))
-                                }
-                            }
-                        }
-
-                        // Quality picker
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Quality")
-                                .font(.headline.weight(.bold))
-                                .foregroundStyle(.white)
-
-                            ForEach(stream.qualities) { q in
-                                Button {
-                                    selectedQuality = q
-                                } label: {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text("\(q.height)p")
-                                                .font(.headline.weight(.semibold))
-                                                .foregroundStyle(.white)
-                                            Text("\(q.bandwidth / 1_000_000) Mbps • \(q.codecs)")
-                                                .font(.caption)
-                                                .foregroundStyle(.white.opacity(0.6))
-                                        }
-                                        Spacer()
-                                        if selectedQuality.id == q.id {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundStyle(Cinema.red)
-                                                .font(.title2)
-                                        }
-                                    }
-                                    .padding()
-                                    .background(
-                                        selectedQuality.id == q.id ?
-                                        Color.white.opacity(0.15) : Color.white.opacity(0.08),
-                                        in: RoundedRectangle(cornerRadius: 10)
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 10)
-                                            .stroke(selectedQuality.id == q.id ? Cinema.red : Color.clear, lineWidth: 2)
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-
-                        // Subtitle picker
-                        if !stream.subtitles.isEmpty {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("Subtitles")
-                                    .font(.headline.weight(.bold))
-                                    .foregroundStyle(.white)
-
-                                Button {
-                                    selectedSubtitle = nil
-                                } label: {
-                                    subtitleRow(label: "None", selected: selectedSubtitle == nil)
-                                }
-                                .buttonStyle(.plain)
-
-                                ForEach(stream.subtitles) { s in
-                                    Button {
-                                        selectedSubtitle = s
-                                    } label: {
-                                        subtitleRow(label: s.label, forced: s.forced, selected: selectedSubtitle?.id == s.id)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                    }
-                    .padding(20)
-                }
-            }
-            .navigationTitle("Confirm Download")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Download") {
-                        onConfirm(selectedQuality, selectedSubtitle)
-                    }
-                    .fontWeight(.bold)
-                }
-            }
-        }
-    }
-
-    private func subtitleRow(label: String, forced: Bool = false, selected: Bool) -> some View {
-        HStack {
-            Text(label)
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(.white)
-            if forced {
-                Text("FORCED")
-                    .font(.caption2.weight(.bold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Cinema.red, in: Capsule())
-            }
-            Spacer()
-            if selected {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(Cinema.red)
-                    .font(.title2)
-            }
-        }
-        .padding()
-        .background(
-            selected ? Color.white.opacity(0.15) : Color.white.opacity(0.08),
-            in: RoundedRectangle(cornerRadius: 10)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(selected ? Cinema.red : Color.clear, lineWidth: 2)
-        )
     }
 }

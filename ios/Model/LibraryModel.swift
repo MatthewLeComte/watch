@@ -186,12 +186,12 @@ final class LibraryModel {
     }
 
     /// Search a source by query.
-    func sourceSearch(query: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+    func sourceSearch(query: String, source: String = "meta") async throws -> [SourceSearchResult] {
         try await api.sourceSearch(query: query, source: source)
     }
 
     /// Search a source by IMDb ID.
-    func sourceSearchByImdb(imdbId: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+    func sourceSearchByImdb(imdbId: String, source: String = "meta") async throws -> [SourceSearchResult] {
         try await api.sourceSearchByImdb(imdbId: imdbId, source: source)
     }
 
@@ -200,9 +200,14 @@ final class LibraryModel {
         try await api.sourceResolve(source: source, id: id)
     }
 
-    /// Download the selected quality to the library.
-    func sourceDownload(source: String, stream: SourceStreamInfo, qualityHeight: Int, subtitleLang: String?) async throws -> Movie {
-        try await api.sourceDownload(source: source, stream: stream, qualityHeight: qualityHeight, subtitleLang: subtitleLang)
+    /// Persist a captured playlist to R2 (chunked server-side save).
+    func relaySave(playlist: URL, referer: URL?, tmdbId: Int, mediaType: String, season: Int, episode: Int) async throws -> RelaySaveJob {
+        try await api.relaySave(playlist: playlist, referer: referer, tmdbId: tmdbId, mediaType: mediaType, season: season, episode: episode)
+    }
+
+    /// Poll a persist job.
+    func relaySaveStatus(id: String) async throws -> RelaySaveJob {
+        try await api.relaySaveStatus(id: id)
     }
 
     func rematch(_ movie: Movie) async {

@@ -30,7 +30,7 @@ struct WatchAPI: Sendable {
     }
 
     /// Search a source by query string.
-    func sourceSearch(query: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+    func sourceSearch(query: String, source: String = "meta") async throws -> [SourceSearchResult] {
         let data = try await send(path: "v1/sources/search", method: "GET", query: [
             URLQueryItem(name: "q", value: query),
             URLQueryItem(name: "source", value: source)
@@ -39,7 +39,7 @@ struct WatchAPI: Sendable {
     }
 
     /// Search a source by IMDb ID.
-    func sourceSearchByImdb(imdbId: String, source: String = "67movies") async throws -> [SourceSearchResult] {
+    func sourceSearchByImdb(imdbId: String, source: String = "meta") async throws -> [SourceSearchResult] {
         let data = try await send(path: "v1/sources/search", method: "GET", query: [
             URLQueryItem(name: "imdb", value: imdbId),
             URLQueryItem(name: "source", value: source)
@@ -57,22 +57,31 @@ struct WatchAPI: Sendable {
         return try JSONDecoder().decode(TVEpisodeList.self, from: data).episodes
     }
 
-    /// Resolve a source item to stream info (master playlist, qualities, subtitles).
+    /// Resolve a source item to stream info (documented embed links).
     func sourceResolve(source: String, id: String) async throws -> SourceStreamInfo {
         let data = try await send(path: "v1/sources/\(source)/resolve/\(id)", method: "GET")
         return try JSONDecoder().decode(SourceStreamInfo.self, from: data)
     }
 
-    /// Download the selected quality to the library.
-    func sourceDownload(source: String, stream: SourceStreamInfo, qualityHeight: Int, subtitleLang: String?) async throws -> Movie {
-        var obj: [String: Any] = [
-            "stream": stream.toDictionary(),
-            "quality": ["height": qualityHeight]
+    /// Persist a captured playlist to R2 (chunked server-side save).
+    func relaySave(playlist: URL, referer: URL?, tmdbId: Int, mediaType: String, season: Int, episode: Int) async throws -> RelaySaveJob {
+        let obj: [String: Any] = [
+            "playlistUrl": playlist.absoluteString,
+            "referer": referer?.absoluteString ?? NSNull(),
+            "tmdbId": tmdbId,
+            "mediaType": mediaType,
+            "season": season,
+            "episode": episode,
         ]
-        if let subtitleLang { obj["subtitleLang"] = subtitleLang }
         let body = try JSONSerialization.data(withJSONObject: obj)
-        let data = try await send(path: "v1/sources/\(source)/download", method: "POST", body: body, contentType: "application/json")
-        return try JSONDecoder().decode(Movie.self, from: data)
+        let data = try await send(path: "v1/relay/save", method: "POST", body: body, contentType: "application/json")
+        return try JSONDecoder().decode(RelaySaveJob.self, from: data)
+    }
+
+    /// Poll a persist job.
+    func relaySaveStatus(id: String) async throws -> RelaySaveJob {
+        let data = try await send(path: "v1/relay/save/\(id)", method: "GET")
+        return try JSONDecoder().decode(RelaySaveJob.self, from: data)
     }
 
     // MARK: - Existing Methods
@@ -310,6 +319,24 @@ struct SourceSubtitle: Codable, Hashable, Sendable, Identifiable {
     var forced: Bool
 }
 
+struct RelaySaveJob: Codable, Hashable, Sendable {
+    var id: String
+    var title: String?
+    var total: Int?
+    var done: Int?
+    var bytes: Int?
+    var status: String
+    var movie_id: String?
+    var error: String?
+
+    var progress: Double {
+        guard let total, total > 0 else { return 0 }
+        return Double(done ?? 0) / Double(total)
+    }
+    var isDone: Bool { status == "done" }
+    var isFailed: Bool { status == "error" }
+}
+
 struct SourceStreamInfo: Codable, Hashable, Sendable {
     var id: String
     var title: String
@@ -317,33 +344,12 @@ struct SourceStreamInfo: Codable, Hashable, Sendable {
     var imdbId: String?
     var poster: String?
     var hlsUrl: String
+    var embedUrl: String?
+    var torrentUrl: String?
+    var aggUrl: String?
+    var downloadUrl: String?
     var qualities: [SourceQuality]
     var subtitles: [SourceSubtitle]
-
-    func toDictionary() -> [String: Any] {
-        [
-            "id": id,
-            "title": title,
-            "year": year ?? NSNull(),
-            "imdbId": imdbId ?? NSNull(),
-            "poster": poster ?? NSNull(),
-            "hlsUrl": hlsUrl,
-            "qualities": qualities.map { $0.toDictionary() },
-            "subtitles": subtitles.map { $0.toDictionary() }
-        ]
-    }
-}
-
-extension SourceQuality {
-    func toDictionary() -> [String: Any] {
-        ["height": height, "bandwidth": bandwidth, "codecs": codecs, "uri": uri]
-    }
-}
-
-extension SourceSubtitle {
-    func toDictionary() -> [String: Any] {
-        ["lang": lang, "label": label, "uri": uri, "forced": forced]
-    }
 }
 
 private struct TrailerResolve: Codable { var ytId: String? }

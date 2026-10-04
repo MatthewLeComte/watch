@@ -54,7 +54,7 @@ struct FullScreenPlayer: ViewModifier {
                     movie = nil
                 }
                 presented = vc
-                topVC()?.present(vc, animated: true)
+                topViewController()?.present(vc, animated: true)
             }
         } else {
             if let vc = presented {
@@ -65,13 +65,15 @@ struct FullScreenPlayer: ViewModifier {
             model = nil
         }
     }
+}
 
-    private func topVC() -> UIViewController? {
-        var base = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-            .first { $0.isKeyWindow }?.rootViewController
-        while let next = base?.presentedViewController { base = next }
-        return base
-    }
+/// Top-most presented view controller of the key window.
+@MainActor
+func topViewController() -> UIViewController? {
+    var base = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .flatMap { $0.windows }
+        .first { $0.isKeyWindow }?.rootViewController
+    while let next = base?.presentedViewController { base = next }
+    return base
 }
