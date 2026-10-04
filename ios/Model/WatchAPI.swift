@@ -147,6 +147,12 @@ struct WatchAPI: Sendable {
         return try JSONDecoder().decode(Movie.self, from: data)
     }
 
+    /// Make a rental permanent.
+    func keep(id: String) async throws -> Movie {
+        let data = try await send(path: "v1/items/\(id)/keep", method: "POST")
+        return try JSONDecoder().decode(Movie.self, from: data)
+    }
+
     func delete(id: String) async throws {
         _ = try await send(path: "v1/items/\(id)", method: "DELETE")
     }

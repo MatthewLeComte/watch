@@ -246,10 +246,10 @@ struct RiveCaptureView: View {
                     Button("Close") { dismiss() }
                 }
             }
-            .confirmationDialog("Add to your library?", isPresented: $confirmSave, titleVisibility: .visible) {
+            .confirmationDialog("Rent for 45 days?", isPresented: $confirmSave, titleVisibility: .visible) {
                 Button("Add to Library") { startServerSave() }
             } message: {
-                Text("Saves a permanent copy of \(heading) to your library.")
+                Text("Saves \(heading) to your library as a 45 day rental. It deletes itself unless you press and hold it and choose Keep Permanently.")
             }
         }
     }
@@ -368,8 +368,8 @@ struct RiveCaptureView: View {
         top.present(vc, animated: true) { player.play() }
     }
 
-    /// Persist the captured playlist to R2 via the worker (chunked save), then
-    /// pull the new title into the library.
+    /// Save the captured playlist to R2 via the worker (chunked save) as a rental,
+    /// then pull the new title into the library.
     private func startServerSave() {
         guard saveTask == nil, let playlist, let tmdb = result.tmdbId else { return }
         saveError = nil

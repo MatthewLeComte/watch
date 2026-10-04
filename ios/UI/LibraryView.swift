@@ -145,6 +145,11 @@ struct LibraryView: View {
         .navigationSplitViewStyle(.balanced)
     }
 
+        let rented = library.movies.filter(\.isRental)
+        if !rented.isEmpty {
+            let soonest = rented.compactMap(\.rentalDaysLeft).min() ?? 0
+            r.append(Shelf(id: "rented", title: "Rented · next one deletes in \(soonest)d", movies: rented))
+        }
     private var shelves: [Shelf] {
         var r: [Shelf] = []
         let c = library.movies.filter { (library.positions[$0.id] ?? 0) > 30 }
@@ -152,7 +157,7 @@ struct LibraryView: View {
         let s = library.movies.filter { (library.fractions[$0.id] ?? 0) >= 0.999 }
         if !s.isEmpty { r.append(Shelf(id: "device", title: "On This Device", movies: s)) }
         var bg: [String: [Movie]] = [:], loose: [Movie] = []
-        for m in library.movies { if m.genres.isEmpty { loose.append(m) } else { for g in m.genres { bg[g, default: []].append(m) } } }
+        for m in library.movies where !m.isRental { if m.genres.isEmpty { loose.append(m) } else { for g in m.genres { bg[g, default: []].append(m) } } }
         for g in bg.keys.sorted() { r.append(Shelf(id: "genre-\(g)", title: g, movies: bg[g]!)) }
         if !loose.isEmpty { r.append(Shelf(id: "movies", title: "All Movies", movies: loose)) }
         else if r.isEmpty, !library.movies.isEmpty { r.append(Shelf(id: "movies", title: "All Movies", movies: library.movies)) }
@@ -442,6 +447,9 @@ struct LibraryView: View {
                                         .tint(Cinema.red)
                                         .frame(width: card)
                                 }
+        if m.isRental {
+            Button { Task { await library.keep(m) } } label: { Label("Keep Permanently", systemImage: "pin.fill") }
+        }
                             }
                         }
                         .buttonStyle(.plain)

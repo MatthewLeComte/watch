@@ -4,7 +4,7 @@ import { ingest, saveCache } from "./ingest";
 import { contentTypeFor, edgeCache, extOf, parseByteRange, parseReleaseName, srtToVtt } from "./lib";
 import { handleWatchMcp } from "./mcp";
 import { SOURCES, listSources } from "./sources";
-import { handleRelayPl, handleRelaySeg, handleRelaySave, handleRelaySaveStatus, handleHlsServe, handleSaveBatch, type SaveMessage } from "./relay";
+import { handleRelayPl, handleRelaySeg, handleRelaySave, handleRelaySaveStatus, handleHlsServe, handleSaveBatch, purgeJob, type SaveMessage } from "./relay";
 import { TmdbUnconfigured } from "./sources/meta";
 import "./sources/registry";
 import { checkUpload } from "./validate";
@@ -47,6 +47,7 @@ type MovieRow = {
   tmdb_id: number | null;
   created_at: string;
   updated_at: string;
+  expires_at: string | null;
 };
 
 type SubRow = {
@@ -58,6 +59,9 @@ type SubRow = {
 };
 
 export default {
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(sweepExpired(env));
+  },
   async queue(batch: MessageBatch, env: Env): Promise<void> {
     for (const msg of batch.messages) {
       try {
@@ -269,6 +273,7 @@ async function libraryRoutes(request: Request, env: Env, path: string): Promise<
   if (!rest && request.method === "GET") return oneItem(env, id);
   if (!rest && request.method === "PATCH") return patchItem(request, env, id);
   if (!rest && request.method === "DELETE") return deleteItem(env, id);
+  if (rest === "keep" && request.method === "POST") return keepItem(env, id);
   if (rest === "complete" && request.method === "POST") return completeItem(env, id);
   if (rest === "stream" && request.method === "POST") return publishItem(env, id);
   if (rest === "purge" && request.method === "POST") return purgeOriginal(env, id);
@@ -502,8 +507,11 @@ async function saveStream(env: Env, id: string, video: StreamVideo, downloadUrl?
 
 export async function listItems(env: Env): Promise<Response> {
   await ensureTrailerSchema(env);
-  // Only finished, validated titles are in the library; uploads in flight stay out of it.
-  const rows = await env.watch.prepare("SELECT * FROM movie WHERE status = 'ready' ORDER BY created_at DESC").all<MovieRow>();
+  // Only finished, validated titles are in the library; uploads in flight and expired rentals stay out.
+  const rows = await env.watch
+    .prepare("SELECT * FROM movie WHERE status = 'ready' AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC")
+    .bind(new Date().toISOString())
+    .all<MovieRow>();
   const subs = await env.watch.prepare("SELECT movie_id, lang, label, source, release_name, hearing_impaired FROM subtitle").all<
     SubRow & { movie_id: string }
   >();
@@ -842,10 +850,38 @@ export async function deleteItem(env: Env, id: string): Promise<Response> {
     `bif/${id}.bif`,
     ...subs.results.map((s) => s.r2_key),
   ]);
+  // A saved stream lives as chunks under hls/<job>/, not video/<id>.
+  const job = await env.watch.prepare("SELECT id FROM hls_job WHERE movie_id = ?").bind(id).first<{ id: string }>();
+  if (job) {
+    await purgeJob(env, job.id);
+    await env.watch.prepare("DELETE FROM hls_job WHERE id = ?").bind(job.id).run();
+  }
   await env.watch.prepare("DELETE FROM subtitle WHERE movie_id = ?").bind(id).run();
   await env.watch.prepare("DELETE FROM upload WHERE movie_id = ?").bind(id).run();
   await env.watch.prepare("DELETE FROM movie WHERE id = ?").bind(id).run();
   return json({ ok: true });
+}
+
+/** Turn a rental into a permanent title: it no longer expires. */
+async function keepItem(env: Env, id: string): Promise<Response> {
+  const kept = await env.watch
+    .prepare("UPDATE movie SET expires_at = NULL, updated_at = ? WHERE id = ? AND status = 'ready'")
+    .bind(new Date().toISOString(), id)
+    .run();
+  if (!(kept.meta?.changes ?? 0)) return json({ error: "not_found" }, 404);
+  return json(await loadItem(env, id));
+}
+
+/** Delete rentals past their date: row, saved chunks and any other objects. Run hourly. */
+async function sweepExpired(env: Env): Promise<void> {
+  const due = await env.watch
+    .prepare("SELECT id FROM movie WHERE expires_at IS NOT NULL AND expires_at <= ? LIMIT 50")
+    .bind(new Date().toISOString())
+    .all<{ id: string }>();
+  for (const row of due.results) {
+    await deleteItem(env, row.id);
+    console.log(JSON.stringify({ evt: "rental_expired", id: row.id }));
+  }
 }
 
 async function media(request: Request, env: Env, id: string): Promise<Response> {
@@ -1328,5 +1364,6 @@ function toItem(row: MovieRow, subs: SubRow[]) {
     })),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    expiresAt: row.expires_at ?? null,
   };
 }

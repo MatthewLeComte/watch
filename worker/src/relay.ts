@@ -12,6 +12,9 @@ import { checkSavedStream } from "./validate.ts";
 
 const UA = "Watch/1";
 
+/** A saved stream is a rental for this long, then it deletes itself unless the user keeps it. */
+export const RENTAL_DAYS = 45;
+
 function bad(url: string): boolean {
   let u: URL;
   try {
@@ -408,7 +411,7 @@ async function sampleSegment(env: Env, key: string): Promise<Uint8Array | null> 
   return obj ? new Uint8Array(await obj.arrayBuffer()) : null;
 }
 
-async function purgeJob(env: Env, jobId: string): Promise<void> {
+export async function purgeJob(env: Env, jobId: string): Promise<void> {
   let cursor: string | undefined;
   do {
     const page = await env.watch_bucket.list({ prefix: `hls/${jobId}/`, cursor, limit: 1000 });

@@ -11,6 +11,7 @@
     "watch_dir": "worker/src"
   },
   "observability": { "enabled": true },
+  "triggers": { "crons": ["0 * * * *"] },
   "routes": [
     { "pattern": "watch.cornerstonecoatings.com", "custom_domain": true }
   ],

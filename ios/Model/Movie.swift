@@ -65,6 +65,16 @@ struct Movie: Codable, Hashable, Identifiable, Sendable {
     var subtitles: [SubtitleTrack]
     var createdAt: String
     var updatedAt: String
+    /// Set while the title is a rental: when it deletes itself. Nil means permanent.
+    var expiresAt: String?
+
+    var isRental: Bool { expiresAt != nil }
+
+    /// Whole days until a rental expires, never negative.
+    var rentalDaysLeft: Int? {
+        guard let expiresAt, let date = ISO8601DateFormatter.withFraction.date(from: expiresAt) ?? ISO8601DateFormatter().date(from: expiresAt) else { return nil }
+        return max(0, Int(ceil(date.timeIntervalSinceNow / 86_400)))
+    }
 
     /// Never show the container name. "Eddie The Eagle.mp4" is not a title.
     var displayTitle: String {
@@ -82,6 +92,14 @@ struct Movie: Codable, Hashable, Identifiable, Sendable {
     var preferredSubtitle: SubtitleTrack? {
         subtitles.first { $0.lang == "en" } ?? subtitles.first
     }
+}
+
+private extension ISO8601DateFormatter {
+    static let withFraction: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
 }
 
 struct ItemList: Codable, Sendable {

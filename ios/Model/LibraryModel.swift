@@ -220,6 +220,14 @@ final class LibraryModel {
         }
     }
 
+    func keep(_ movie: Movie) async {
+        do {
+            replace(try await api.keep(id: movie.id))
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
     func delete(_ movie: Movie) async {
         do {
             try await api.delete(id: movie.id)
