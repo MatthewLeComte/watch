@@ -7,7 +7,7 @@ import { SOURCES, listSources } from "./sources";
 import { handleRelayPl, handleRelaySeg, handleRelaySave, handleRelaySaveStatus, handleHlsServe, handleSaveBatch, purgeJob, type SaveMessage } from "./relay";
 import { TmdbUnconfigured } from "./sources/meta";
 import "./sources/registry";
-import { checkUpload } from "./validate";
+import { MIN_VIDEO_BYTES, checkUpload } from "./validate";
 
 /** R2 requires every part except the last to be at least 5 MiB. 8 MiB matches that rule. */
 const PART = 8 * 1024 * 1024;
@@ -99,6 +99,12 @@ export default {
       const ok = (await rokuAuthorized(request, env)) || authorized(request, env.WATCH_KEY || "") || queryKey(request, env);
       if (!ok) return json({ error: "unauthorized" }, 401);
       return media(request, env, publicMedia[1]!);
+    }
+    const publicBif = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/trick\.bif$/i);
+    if (publicBif && (request.method === "GET" || request.method === "HEAD")) {
+      const ok = (await rokuAuthorized(request, env)) || authorized(request, env.WATCH_KEY || "") || queryKey(request, env);
+      if (!ok) return json({ error: "unauthorized" }, 401);
+      return serveBif(env, publicBif[1]!, request.method === "HEAD");
     }
     const publicCaptions = path.match(/^\/v1\/items\/([0-9a-f-]{36})\/trailer\.vtt$/i);
     if (publicCaptions && (request.method === "GET" || request.method === "HEAD")) {
@@ -275,6 +281,9 @@ async function libraryRoutes(request: Request, env: Env, path: string): Promise<
   if (!rest && request.method === "DELETE") return deleteItem(env, id);
   if (rest === "keep" && request.method === "POST") return keepItem(env, id);
   if (rest === "complete" && request.method === "POST") return completeItem(env, id);
+  if (rest === "replace" && request.method === "POST") return startReplace(request, env, id);
+  if (rest === "replace/complete" && request.method === "POST") return completeReplace(request, env, id);
+  if (rest === "bif" && request.method === "PUT") return putBif(request, env, id);
   if (rest === "stream" && request.method === "POST") return publishItem(env, id);
   if (rest === "purge" && request.method === "POST") return purgeOriginal(env, id);
   if (rest === "playback" && request.method === "GET") return playbackItem(env, id);
@@ -558,6 +567,83 @@ async function createItem(request: Request, env: Env): Promise<Response> {
     .bind(id, upload.uploadId)
     .run();
   return json({ id, partSize: PART }, 201);
+}
+
+/** Seek-preview (BIF) file for the Roku trick-play bar, stored beside the movie in R2. */
+async function serveBif(env: Env, id: string, head: boolean): Promise<Response> {
+  const obj = await env.watch_bucket.get(`bif/${id}.bif`);
+  if (!obj) return json({ error: "no_bif" }, 404);
+  const headers = new Headers({
+    "content-type": "application/octet-stream",
+    "content-length": String(obj.size),
+    "cache-control": "private, max-age=3600",
+  });
+  return new Response(head ? null : obj.body, { status: 200, headers });
+}
+
+async function putBif(request: Request, env: Env, id: string): Promise<Response> {
+  const exists = await env.watch.prepare("SELECT 1 AS ok FROM movie WHERE id = ?").bind(id).first();
+  if (!exists) return json({ error: "not_found" }, 404);
+  const data = new Uint8Array(await request.arrayBuffer());
+  // BIF magic: 0x89 'B' 'I' 'F' 0x0D 0x0A 0x1A 0x0A
+  const magic = [0x89, 0x42, 0x49, 0x46, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (data.length < 64 || magic.some((b, i) => data[i] !== b)) return json({ error: "not_a_bif" }, 400);
+  await env.watch_bucket.put(`bif/${id}.bif`, data, { httpMetadata: { contentType: "application/octet-stream" } });
+  return json({ ok: true, bytes: data.length });
+}
+
+/** Start replacing a title's file with a re-muxed copy. The old file stays until the new one completes. */
+async function startReplace(request: Request, env: Env, id: string): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as { byteSize?: number };
+  const byteSize = Number(body.byteSize);
+  if (!Number.isFinite(byteSize) || byteSize < MIN_VIDEO_BYTES) return json({ error: "bad_size" }, 400);
+  const movie = await env.watch
+    .prepare("SELECT ext FROM movie WHERE id = ? AND status = 'ready'")
+    .bind(id)
+    .first<{ ext: string }>();
+  if (!movie) return json({ error: "not_found" }, 404);
+  if (!(await env.watch_bucket.head(`video/${id}`))) return json({ error: "no_file_to_replace" }, 409);
+  const busy = await env.watch.prepare("SELECT 1 AS ok FROM upload WHERE movie_id = ?").bind(id).first();
+  if (busy) return json({ error: "upload_in_progress" }, 409);
+  const upload = await env.watch_bucket.createMultipartUpload(`video/${id}`, {
+    httpMetadata: { contentType: contentTypeFor(movie.ext) },
+  });
+  await env.watch
+    .prepare("INSERT INTO upload (movie_id, upload_id, parts_json) VALUES (?, ?, '[]')")
+    .bind(id, upload.uploadId)
+    .run();
+  return json({ id, partSize: PART }, 201);
+}
+
+async function completeReplace(request: Request, env: Env, id: string): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as { byteSize?: number };
+  const byteSize = Number(body.byteSize);
+  const row = await env.watch
+    .prepare("SELECT upload_id, parts_json FROM upload WHERE movie_id = ?")
+    .bind(id)
+    .first<{ upload_id: string; parts_json: string }>();
+  if (!row) return json({ error: "no_upload" }, 409);
+  const parts = (JSON.parse(row.parts_json) as { partNumber: number; etag: string; size: number }[]).sort(
+    (a, b) => a.partNumber - b.partNumber,
+  );
+  const total = parts.reduce((sum, p) => sum + p.size, 0);
+  const upload = env.watch_bucket.resumeMultipartUpload(`video/${id}`, row.upload_id);
+  // Never replace the good file with a short or gapped upload.
+  const gapless = parts.every((p, i) => p.partNumber === i + 1);
+  if (!parts.length || !gapless || total !== byteSize) {
+    await upload.abort().catch(() => {});
+    await env.watch.prepare("DELETE FROM upload WHERE movie_id = ?").bind(id).run();
+    return json({ error: "incomplete_upload", received: total, expected: byteSize }, 422);
+  }
+  await upload.complete(parts.map((p) => ({ partNumber: p.partNumber, etag: p.etag })));
+  await env.watch.prepare("DELETE FROM upload WHERE movie_id = ?").bind(id).run();
+  const stored = await env.watch_bucket.head(`video/${id}`);
+  await env.watch
+    .prepare("UPDATE movie SET byte_size = ?, updated_at = ? WHERE id = ?")
+    .bind(stored?.size ?? byteSize, new Date().toISOString(), id)
+    .run();
+  console.log(JSON.stringify({ evt: "replaced", id, bytes: stored?.size ?? byteSize }));
+  return json(await loadItem(env, id));
 }
 
 async function uploadPart(request: Request, env: Env, id: string, partNumber: number): Promise<Response> {
