@@ -1,15 +1,116 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component name="MainScene" extends="Scene">
   <children>
-    <Rectangle id="bg" width="1920" height="1080" color="0x0E0E10FF" />
-    <PosterGrid
-      id="grid"
-      translation="[80, 100]"
-      basePosterSize="[176,264]"
-      itemSpacing="[16,16]"
-      numColumns="6"
-      numRows="3"
+    <Rectangle id="bg" width="1920" height="1080" color="0x000000FF" />
+    <Poster
+      id="ambient"
+      translation="[640, 0]"
+      width="1280"
+      height="620"
+      loadWidth="48"
+      loadHeight="27"
+      loadDisplayMode="scaleToZoom"
+      opacity="0.6"
+      />
+    <Video
+      id="hero"
+      translation="[760, 0]"
+      width="1102"
+      height="620"
+      enableUI="false"
+      mute="true"
+      loop="true"
+      notificationInterval="0.2"
+      visible="false"
+      />
+    <Group id="veil" translation="[640, 0]">
+      <Rectangle width="1280" height="620" color="0x000000FF" />
+      <Poster
+        id="backdrop"
+        width="1280"
+        height="620"
+        loadDisplayMode="scaleToZoom"
+        opacity="0"
+        />
+    </Group>
+    <Poster
+      id="scrim"
+      translation="[640, 0]"
+      width="1280"
+      height="620"
+      uri="pkg:/images/scrim-left.png"
+      />
+    <Rectangle id="coverLeft" width="640" height="760" color="0x000000FF" />
+    <Rectangle id="coverBottom" translation="[640, 620]" width="1280" height="160" color="0x000000FF" />
+    <Rectangle
+      id="capBg"
+      translation="[730, 505]"
+      width="1100"
+      height="84"
+      color="0x00000099"
+      visible="false"
+      />
+    <Label
+      id="caption"
+      translation="[740, 509]"
+      width="1080"
+      height="76"
+      wrap="true"
+      maxLines="2"
+      horizAlign="center"
+      vertAlign="center"
+      font="font:MediumSystemFont"
+      color="0xFFFFFFFF"
+      />
+    <Label
+      id="brand"
+      translation="[80, 56]"
+      font="font:LargeBoldSystemFont"
+      color="0xE50914FF"
+      text="MatFlix"
+      />
+    <Label
+      id="title"
+      translation="[80, 130]"
+      width="600"
+      height="150"
+      wrap="true"
+      maxLines="2"
+      vertAlign="bottom"
+      font="font:LargeBoldSystemFont"
+      color="0xFFFFFFFF"
+      />
+    <Label
+      id="meta"
+      translation="[80, 292]"
+      width="600"
+      font="font:MediumBoldSystemFont"
+      color="0xD2D2D2FF"
+      />
+    <Label
+      id="overview"
+      translation="[80, 342]"
+      width="560"
+      height="190"
+      wrap="true"
+      maxLines="4"
+      font="font:SmallSystemFont"
+      color="0xB8B8B8FF"
+      />
+    <RowList
+      id="rows"
+      translation="[60, 610]"
+      itemSize="[1800, 400]"
+      rowItemSize="[[200, 300]]"
+      rowItemSpacing="[[16, 0]]"
+      rowLabelOffset="[[0, 8]]"
+      rowLabelFont="font:MediumBoldSystemFont"
+      showRowLabel="[true]"
+      numRows="2"
+      focusXOffset="[0]"
+      rowFocusAnimationStyle="floatingFocus"
       focusable="true"
+      opacity="0"
       />
     <Video
       id="player"
@@ -27,19 +128,11 @@
       focusable="true"
       visible="false"
       />
-    <Rectangle
-      id="header"
-      width="1920"
-      height="72"
-      color="0x000000C0"
-      />
-    <Label
-      id="title"
-      translation="[80, 18]"
-      font="font:LargeBoldSystemFont"
-      text="Watch"
-      color="0xFFFFFFFF"
-      />
+    <Timer id="heroTimer" duration="0.6" repeat="false" />
+    <Timer id="startTimer" duration="0.6" repeat="false" />
+    <Timer id="veilTick" duration="0.04" repeat="true" />
+    <Timer id="backdropTick" duration="0.04" repeat="true" />
+    <Timer id="rowsTick" duration="0.04" repeat="true" />
   </children>
   <script type="text/brightscript" uri="pkg:/source/MainScene.brs" />
 </component>

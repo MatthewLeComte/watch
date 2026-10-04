@@ -1,23 +1,52 @@
+' Home: the focused title's trailer fades in on top with captions, shelves scroll below.
+' Selecting a title plays it full screen. No sub views.
+
 sub Init()
-  m.grid = m.top.findNode("grid")
+  m.hero = m.top.findNode("hero")
+  m.rows = m.top.findNode("rows")
   m.player = m.top.findNode("player")
-  m.player.visible = false
   m.keyCatcher = m.top.findNode("keyCatcher")
-  m.player.ObserveField("state", "OnPlayerState")
-  StyleTrickPlay()
-  m.grid.ObserveField("itemSelected", "OnGridSelect")
-  m.current = "grid"
-  m.playTries = 0
-  m.gridMode = 6
-  m.grid.basePosterSize = [280, 420]
-  m.grid.numColumns = 6
-  m.grid.itemSpacing = [24, 24]
-  m.grid.translation = [60, 140]
-  m.header = m.top.findNode("header")
   m.titleLabel = m.top.findNode("title")
-  
-  ' Read from registry
+  m.metaLabel = m.top.findNode("meta")
+  m.overviewLabel = m.top.findNode("overview")
+  m.heroTimer = m.top.findNode("heroTimer")
+  m.startTimer = m.top.findNode("startTimer")
+  m.veil = m.top.findNode("veil")
+  m.ambient = m.top.findNode("ambient")
+  m.rowsTick = m.top.findNode("rowsTick")
+  m.veilTick = m.top.findNode("veilTick")
+  m.backdropTick = m.top.findNode("backdropTick")
+  m.backdrop = m.top.findNode("backdrop")
+  m.scrim = m.top.findNode("scrim")
+  m.coverLeft = m.top.findNode("coverLeft")
+  m.coverBottom = m.top.findNode("coverBottom")
+  m.brand = m.top.findNode("brand")
+  m.caption = m.top.findNode("caption")
+  m.capBg = m.top.findNode("capBg")
+
+  m.player.visible = false
+  m.player.ObserveField("state", "OnPlayerState")
+  m.rows.ObserveField("rowItemFocused", "OnFocusChanged")
+  m.rows.ObserveField("rowItemSelected", "OnSelect")
+  m.heroTimer.ObserveField("fire", "OnHeroTimer")
+  m.startTimer.ObserveField("fire", "OnStartTimer")
+  m.hero.ObserveField("state", "OnHeroState")
+  m.hero.ObserveField("position", "OnHeroPosition")
+  m.backdrop.ObserveField("loadStatus", "OnBackdropLoad")
+  m.veilTick.ObserveField("fire", "OnVeilTick")
+  m.rowsTick.ObserveField("fire", "OnRowsTick")
+  m.backdropTick.ObserveField("fire", "OnBackdropTick")
+  StyleTrickPlay()
+
+  m.current = "home"
+  m.playTries = 0
+  m.focused = invalid
+  m.heroId = ""
+  m.pending = invalid
+  m.cues = []
+  m.capTask = invalid
   m.reg = CreateObject("roRegistrySection", "WatchCache")
+
   json = ReadChunks(m.reg, "catalog")
   if json <> invalid and type(json) = "String" and Len(json) > 0
     j = ParseJSON(json)
@@ -44,25 +73,210 @@ function ReadChunks(reg as Object, key as String) as Dynamic
   return out
 end function
 
+function NewItem(parent as Object, item as Object) as Object
+  n = parent.CreateChild("ContentNode")
+  n.AddField("itemId", "string", false)
+  n.AddField("itemTitle", "string", false)
+  n.AddField("itemYear", "string", false)
+  n.AddField("itemRuntime", "string", false)
+  n.AddField("itemTrailer", "string", false)
+  n.AddField("itemCaps", "string", false)
+  n.AddField("itemSaved", "string", false)
+  n.AddField("itemOverview", "string", false)
+  n.AddField("itemGenre", "string", false)
+  n.AddField("itemAnim", "string", false)
+  n.AddField("itemSubs", "string", false)
+  n.AddField("itemRental", "string", false)
+  n.SetFields(item)
+  return n
+end function
+
+' Shelves: Rented, then Animation, then Live Action.
 sub LoadCatalog(items)
   print "LoadCatalog: " + StrI(items.Count()) + " items"
-  root = CreateObject("roSGNode", "ContentNode")
+  rented = []
+  animation = []
+  live = []
   for each item in items
-    n = root.CreateChild("ContentNode")
-    n.AddField("itemId", "string", false)
-    n.AddField("itemTitle", "string", false)
-    n.SetFields(item)
+    if item.itemRental = "1"
+      rented.Push(item)
+    else if item.itemAnim = "1"
+      animation.Push(item)
+    else
+      live.Push(item)
+    end if
   end for
-  m.grid.content = root
-  m.grid.SetFocus(true)
-  print "Grid content set, kids: " + StrI(root.GetChildCount())
+
+  root = CreateObject("roSGNode", "ContentNode")
+  if rented.Count() > 0 then AddShelf(root, "Rented", rented)
+  if animation.Count() > 0 then AddShelf(root, "Animation", animation)
+  if live.Count() > 0 then AddShelf(root, "Live Action", live)
+
+  m.rows.content = root
+  m.rows.SetFocus(true)
+  ' Shelves fade in rather than pop in
+  m.rows.opacity = 0
+  m.rowsTick.control = "start"
+  print "Shelves: " + StrI(root.GetChildCount())
+  if root.GetChildCount() > 0 then FocusHero(root.GetChild(0).GetChild(0))
 end sub
 
-sub OnGridSelect()
-  if m.current <> "grid" then return
-  idx = m.grid.itemSelected
-  if idx = invalid then return
-  it = m.grid.content.GetChild(idx)
+sub AddShelf(root as Object, name as String, items as Object)
+  shelf = root.CreateChild("ContentNode")
+  shelf.title = name
+  for each item in items
+    NewItem(shelf, item)
+  end for
+end sub
+
+sub OnFocusChanged()
+  at = m.rows.rowItemFocused
+  if at = invalid or m.rows.content = invalid then return
+  shelf = m.rows.content.GetChild(at[0])
+  if shelf = invalid then return
+  FocusHero(shelf.GetChild(at[1]))
+end sub
+
+' Backdrop and text update at once; the trailer fades in once focus has rested.
+sub FocusHero(it as Object)
+  if it = invalid then return
+  m.focused = it
+  m.titleLabel.text = it.itemTitle
+  parts = []
+  if it.itemYear <> "" then parts.Push(it.itemYear)
+  if it.itemRuntime <> ""
+    mins = Val(it.itemRuntime)
+    parts.Push(StrI(Int(mins / 60)).Trim() + "h " + StrI(mins mod 60).Trim() + "m")
+  end if
+  if it.itemAnim = "1"
+    parts.Push("Animation")
+  else if it.itemGenre <> ""
+    parts.Push(it.itemGenre)
+  end if
+  meta = ""
+  for each part in parts
+    if meta <> "" then meta = meta + "   |   "
+    meta = meta + part
+  end for
+  m.metaLabel.text = meta
+  m.overviewLabel.text = it.itemOverview
+  if m.heroId <> it.itemId
+    StopHero()
+    m.backdropTick.control = "stop"
+    m.backdrop.opacity = 0
+    m.backdrop.uri = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/backdrop"
+    ' Same image decoded tiny and stretched: a soft glow that fills the area around the trailer
+    m.ambient.uri = m.backdrop.uri
+  end if
+  m.heroTimer.control = "stop"
+  m.heroTimer.control = "start"
+end sub
+
+sub StopHero()
+  m.veilTick.control = "stop"
+  m.hero.control = "stop"
+  m.hero.visible = false
+  m.veil.opacity = 1
+  m.heroId = ""
+  m.cues = []
+  m.caption.text = ""
+  m.capBg.visible = false
+end sub
+
+sub OnHeroTimer()
+  if m.current <> "home" or m.focused = invalid then return
+  it = m.focused
+  if it.itemTrailer <> "1" then return
+  if it.itemId = m.heroId then return
+  m.heroId = it.itemId
+  apiKey = m.reg.Read("apiKey")
+  base = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId
+  content = CreateObject("roSGNode", "ContentNode")
+  content.url = base + "/trailer?key=" + apiKey
+  content.streamFormat = "mp4"
+  content.HttpHeaders = ["Authorization:Bearer " + apiKey]
+  m.hero.mute = true
+  m.hero.loop = true
+  m.hero.content = content
+  m.hero.control = "play"
+  ' Captions are drawn here, on top of the zoomed video, from the trailer's WebVTT
+  m.cues = []
+  if it.itemCaps = "1"
+    m.capTask = CreateObject("roSGNode", "CaptionTask")
+    m.capTask.ObserveField("cues", "OnCues")
+    m.capTask.url = base + "/trailer.vtt?key=" + apiKey
+    m.capTask.key = apiKey
+    m.capTask.control = "RUN"
+  end if
+end sub
+
+sub OnCues()
+  if m.capTask <> invalid then m.cues = m.capTask.cues
+end sub
+
+' The backdrop shows until the trailer is actually playing, then the video fades in over it
+sub OnHeroState()
+  if m.hero.state = "playing" and m.current = "home" and not m.hero.visible
+    m.hero.visible = true
+    m.veil.opacity = 1
+    m.veilTick.control = "start"
+  end if
+end sub
+
+' The black veil (and the backdrop on it) fades out over the playing trailer
+sub OnVeilTick()
+  o = m.veil.opacity - 0.04
+  if o <= 0
+    o = 0
+    m.veilTick.control = "stop"
+  end if
+  m.veil.opacity = o
+end sub
+
+sub OnRowsTick()
+  o = m.rows.opacity + 0.06
+  if o >= 1
+    o = 1
+    m.rowsTick.control = "stop"
+  end if
+  m.rows.opacity = o
+end sub
+
+sub OnBackdropLoad()
+  if m.backdrop.loadStatus = "ready"
+    m.backdrop.opacity = 0
+    m.backdropTick.control = "start"
+  end if
+end sub
+
+sub OnBackdropTick()
+  o = m.backdrop.opacity + 0.06
+  if o >= 1
+    o = 1
+    m.backdropTick.control = "stop"
+  end if
+  m.backdrop.opacity = o
+end sub
+
+sub OnHeroPosition()
+  secs = m.hero.position
+  text = ""
+  for each cue in m.cues
+    if secs >= cue.s and secs < cue.e
+      text = cue.t
+      exit for
+    end if
+  end for
+  if text <> m.caption.text then m.caption.text = text
+  m.capBg.visible = (text <> "")
+end sub
+
+sub OnSelect()
+  at = m.rows.rowItemSelected
+  if m.current <> "home" or at = invalid then return
+  shelf = m.rows.content.GetChild(at[0])
+  if shelf = invalid then return
+  it = shelf.GetChild(at[1])
   if it = invalid or it.itemId = invalid then return
   print "Selected: " + it.itemId
   StartPlayback(it)
@@ -75,28 +289,59 @@ sub StyleTrickPlay()
 end sub
 
 sub StartPlayback(it as Object)
+  if m.current <> "home" then return
   print "Playing: " + it.itemId
+  m.current = "starting"
+  m.pending = it
+  m.heroTimer.control = "stop"
+  StopHero()
+  m.rows.visible = false
+  SetHomeLayers(false)
+  m.keyCatcher.visible = true
+  m.keyCatcher.SetFocus(true)
+  ' The trailer and the movie cannot share the video decoder, so give it a moment to release
+  m.startTimer.control = "start"
+end sub
+
+sub SetHomeLayers(on as Boolean)
+  m.ambient.visible = on
+  m.veil.visible = on
+  m.scrim.visible = on
+  m.coverLeft.visible = on
+  m.coverBottom.visible = on
+  m.brand.visible = on
+  m.titleLabel.visible = on
+  m.metaLabel.visible = on
+  m.overviewLabel.visible = on
+end sub
+
+sub OnStartTimer()
+  it = m.pending
+  if it = invalid or m.current <> "starting" then return
   m.playTries = 0
   content = CreateObject("roSGNode", "ContentNode")
   apiKey = m.reg.Read("apiKey")
-  bifUrl = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/trick.bif?key=" + apiKey
-  content.url = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/index.m3u8?key=" + apiKey
-  content.streamFormat = "hls"
+  base = "https://watch.cornerstonecoatings.com"
+  if it.itemSaved <> ""
+    ' Saved stream: HLS chunks in R2. The Bearer header below covers every chunk request.
+    content.url = base + it.itemSaved + "?key=" + apiKey
+    content.streamFormat = "hls"
+  else
+    content.url = base + "/v1/items/" + it.itemId + "/media?key=" + apiKey
+    content.streamFormat = "mp4"
+  end if
   content.title = it.itemTitle
-  content.HttpHeaders = ["Authorization: Bearer " + apiKey]
-  content.SDBifUrl = bifUrl
-  content.HDBifUrl = bifUrl
-  content.FHDBifUrl = bifUrl
+  content.HttpHeaders = ["Authorization:Bearer " + apiKey]
+  if it.itemSubs = "1"
+    subUrl = base + "/v1/items/" + it.itemId + "/subtitles/en?key=" + apiKey
+    content.SubtitleTracks = [{ Language: "eng", TrackName: subUrl, Description: "English" }]
+    m.player.globalCaptionMode = "On"
+  end if
   m.player.content = content
   m.player.visible = true
-  m.grid.visible = false
-  m.header.visible = false
-  m.titleLabel.visible = false
-  m.keyCatcher.visible = true
-  m.player.control = "play"
-  m.keyCatcher.SetFocus(true)
-  ShowScrubBar()
   m.current = "player"
+  m.player.control = "play"
+  ShowScrubBar()
 end sub
 
 sub ShowScrubBar()
@@ -123,7 +368,7 @@ sub OnPlayerState()
   end if
   if m.player.state = "finished"
     print "Player finished"
-    ReturnToGrid()
+    ReturnHome()
     return
   end if
   if m.player.state = "error"
@@ -136,35 +381,27 @@ sub OnPlayerState()
       m.player.control = "play"
       return
     end if
-    ReturnToGrid()
+    ReturnHome()
   end if
 end sub
 
-sub ReturnToGrid()
+sub ReturnHome()
   m.player.control = "stop"
   m.player.visible = false
-  m.grid.visible = true
-  m.header.visible = true
-  m.titleLabel.visible = true
+  m.rows.visible = true
+  SetHomeLayers(true)
   m.keyCatcher.visible = false
-  m.grid.SetFocus(true)
-  m.current = "grid"
+  m.rows.SetFocus(true)
+  m.current = "home"
+  ' Trailer resumes for whatever is focused
+  m.heroTimer.control = "start"
 end sub
 
 function OnKeyEvent(k, p) as Boolean
   if not p then return false
-  if (k = "OK" or k = "Play") and m.current = "grid"
-    idx = m.grid.itemFocused
-    if idx <> invalid and type(idx) = "Integer"
-      it = m.grid.content.GetChild(idx)
-      if it <> invalid and it.itemId <> invalid
-        StartPlayback(it)
-        return true
-      end if
-    end if
-  end if
-  if k = "back" and m.current = "player"
-    ReturnToGrid()
+  if k = "back" and (m.current = "player" or m.current = "starting")
+    m.startTimer.control = "stop"
+    ReturnHome()
     return true
   end if
   if m.current = "player"

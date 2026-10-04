@@ -14,7 +14,11 @@ Sub Main()
     u = JsonEscape(it.HDPosterUrl)
     d = JsonEscape(it.itemId)
     ti = JsonEscape(it.itemTitle)
-    json = json + "{""title"":""" + t + """,""HDPosterUrl"":""" + u + """,""itemId"":""" + d + """,""itemTitle"":""" + ti + """}"
+    json = json + "{""title"":""" + t + """,""HDPosterUrl"":""" + u + """,""itemId"":""" + d + """,""itemTitle"":""" + ti + """"
+    json = json + ",""itemYear"":""" + JsonEscape(it.itemYear) + """,""itemRuntime"":""" + JsonEscape(it.itemRuntime) + """"
+    json = json + ",""itemTrailer"":""" + JsonEscape(it.itemTrailer) + """,""itemSaved"":""" + JsonEscape(it.itemSaved) + """"
+    json = json + ",""itemOverview"":""" + JsonEscape(it.itemOverview) + """"
+    json = json + ",""itemCaps"":""" + JsonEscape(it.itemCaps) + """,""itemGenre"":""" + JsonEscape(it.itemGenre) + """,""itemAnim"":""" + JsonEscape(it.itemAnim) + """,""itemSubs"":""" + JsonEscape(it.itemSubs) + """,""itemRental"":""" + JsonEscape(it.itemRental) + """}"
   end for
   json = json + "]"
   WriteChunks(reg, "catalog", json)
@@ -108,6 +112,37 @@ function FetchCatalog() as Object
       l = l + " (" + StrI(i.year).Trim() + ")"
     end if
     item = {title: l, HDPosterUrl: i.posterUrl, itemId: i.id, itemTitle: i.title}
+    item.itemYear = ""
+    if i.year <> invalid and i.year <> 0 then item.itemYear = StrI(i.year).Trim()
+    item.itemRuntime = ""
+    if i.runtimeMin <> invalid and i.runtimeMin > 0 then item.itemRuntime = StrI(i.runtimeMin).Trim()
+    ' 1 when the worker has a trailer file for this title
+    item.itemTrailer = ""
+    if type(i.trailerFile) = "String" and Len(i.trailerFile) > 0 then item.itemTrailer = "1"
+    item.itemOverview = ""
+    if type(i.overview) = "String" then item.itemOverview = Left(i.overview, 180)
+    item.itemSubs = ""
+    if type(i.subtitles) = "roArray" and i.subtitles.Count() > 0 then item.itemSubs = "1"
+    item.itemCaps = ""
+    if type(i.trailerCaptions) = "String" and Len(i.trailerCaptions) > 0 then item.itemCaps = "1"
+    ' First genre decides the shelf
+    item.itemGenre = ""
+    item.itemAnim = ""
+    if type(i.genres) = "roArray"
+      for each g in i.genres
+        if g = "Animation"
+          item.itemAnim = "1"
+        else if item.itemGenre = ""
+          item.itemGenre = g
+        end if
+      end for
+    end if
+    ' A rental has an expiry date and sits on the Rented shelf
+    item.itemRental = ""
+    if type(i.expiresAt) = "String" and Len(i.expiresAt) > 0 then item.itemRental = "1"
+    ' A saved stream (rental) plays from its HLS playlist; everything else is one MP4 behind /media
+    item.itemSaved = ""
+    if type(i.hlsUrl) = "String" and Left(i.hlsUrl, 8) = "/v1/hls/" then item.itemSaved = i.hlsUrl
     items.Push(item)
   end for
   

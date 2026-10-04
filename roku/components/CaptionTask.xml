@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="CaptionTask" extends="Task">
+  <interface>
+    <field id="url" type="string" />
+    <field id="key" type="string" />
+    <field id="cues" type="array" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/CaptionTask.brs" />
+</component>
