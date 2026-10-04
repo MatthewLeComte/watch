@@ -26,7 +26,9 @@ final class PlayerModel {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
         
-        let mediaURL = "\(api.base)/v1/items/\(movie.id)/media?key=\(api.key)"
+        // A saved stream (rental) lives as HLS chunks; everything else is one file in R2.
+        let path = movie.hlsUrl.flatMap { $0.hasPrefix("/v1/hls/") ? $0 : nil } ?? "/v1/items/\(movie.id)/media"
+        let mediaURL = "\(api.base)\(path)?key=\(api.key)"
         guard let url = URL(string: mediaURL) else { return }
 
         let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(api.key)"]])
