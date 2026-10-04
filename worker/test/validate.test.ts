@@ -59,6 +59,7 @@ describe("checkSavedStream", () => {
     total: 1200,
     done: 1200,
     bytes: 900 * MB,
+    bandwidth: 2_000_000,
     durationSec: 7200,
     expectedSec: 7260,
     firstSegment: ts,
@@ -77,7 +78,7 @@ describe("checkSavedStream", () => {
     assert.equal(checkSavedStream({ ...base, durationSec: 12000 }).ok, false);
   });
   it("uses a wider band for episodes", () => {
-    const tv = { ...base, mediaType: "tv", durationSec: 1500, expectedSec: 2400, bytes: 200 * MB, total: 250, done: 250 };
+    const tv = { ...base, mediaType: "tv", durationSec: 1500, expectedSec: 2400, bytes: 200 * MB, bandwidth: 2_000_000, total: 250, done: 250 };
     assert.equal(checkSavedStream(tv).ok, true);
     assert.equal(checkSavedStream({ ...tv, durationSec: 1000 }).ok, false);
   });
@@ -90,6 +91,10 @@ describe("checkSavedStream", () => {
       })(),
       /too_short/,
     );
+  });
+  it("fails a save far smaller than its length and bitrate imply", () => {
+    const r = checkSavedStream({ ...base, bytes: 100 * MB });
+    assert.match(r.ok ? "" : r.reason, /too_small_for_stream/);
   });
   it("fails incomplete saves, tiny byte counts and non-video segments", () => {
     assert.match((checkSavedStream({ ...base, done: 1199 }) as { reason: string }).reason, /incomplete/);

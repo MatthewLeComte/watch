@@ -68,6 +68,8 @@ export function checkSavedStream(input: {
   total: number;
   done: number;
   bytes: number;
+  /** The variant's advertised bits per second; 0 when unknown. */
+  bandwidth: number;
   durationSec: number;
   expectedSec: number | null;
   firstSegment: Uint8Array | null;
@@ -77,6 +79,11 @@ export function checkSavedStream(input: {
   if (total < 1 || done !== total) return { ok: false, reason: `incomplete: ${done}/${total} segments` };
   if (bytes < MIN_VIDEO_BYTES) return { ok: false, reason: `too_small: ${bytes} bytes` };
   if (durationSec < MIN_STREAM_SEC) return { ok: false, reason: `too_short: ${fmtDuration(durationSec)}` };
+  // What came down must be about what the playlist promised: length x bitrate. Peak bandwidth
+  // overstates the average, so only a quarter of it is required; a truncated save falls far below.
+  if (input.bandwidth > 0 && bytes < 0.25 * (input.bandwidth / 8) * durationSec) {
+    return { ok: false, reason: `too_small_for_stream: ${Math.round(bytes / 1e6)} MB for ${fmtDuration(durationSec)}` };
+  }
   for (const [name, seg] of [["first", input.firstSegment], ["last", input.lastSegment]] as const) {
     if (!seg || !isTsSegment(seg)) return { ok: false, reason: `${name}_segment_not_video` };
   }

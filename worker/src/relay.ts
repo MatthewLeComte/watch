@@ -295,7 +295,9 @@ export async function handleRelaySave(request: Request, env: Env): Promise<Respo
 
   // Variant meta for the picker record (best effort).
   const variants = parseMasterVariants(masterText);
-  const vHeight = variants.find((v) => v.uri && variantUrl.endsWith(v.uri))?.height ?? 0;
+  const picked = variants.find((v) => v.uri && variantUrl.endsWith(v.uri));
+  const vHeight = picked?.height ?? 0;
+  const vBandwidth = picked?.bandwidth ?? 0;
 
   const now = new Date().toISOString();
   const jobId = crypto.randomUUID();
@@ -309,7 +311,7 @@ export async function handleRelaySave(request: Request, env: Env): Promise<Respo
     )
     .bind(
       jobId, `tmdb:${tmdbId}`, tmdbId, mediaType, season, episode,
-      variantUrl, referer, vHeight, 0,
+      variantUrl, referer, vHeight, vBandwidth,
       JSON.stringify(segs.map((s) => s.d)), segs.length, now, now,
     )
     .run();
@@ -429,7 +431,7 @@ async function maybeFinalize(env: Env, jobId: string): Promise<void> {
   const job = await env.watch
     .prepare("SELECT * FROM hls_job WHERE id = ?")
     .bind(jobId)
-    .first<JobRow & { title: string; tmdb_id: number; media_type: string; season: number; episode: number; referer: string | null; bytes: number }>();
+    .first<JobRow & { title: string; tmdb_id: number; media_type: string; season: number; episode: number; referer: string | null; bytes: number; vbandwidth: number }>();
   if (!job) return;
   try {
     const durations = JSON.parse(job.durations_json) as number[];
@@ -441,7 +443,7 @@ async function maybeFinalize(env: Env, jobId: string): Promise<void> {
       tmdbRuntimeSec(env, job.media_type, job.tmdb_id),
     ]);
     const check = checkSavedStream({
-      mediaType: job.media_type, total: job.total, done: job.done, bytes: job.bytes,
+      mediaType: job.media_type, total: job.total, done: job.done, bytes: job.bytes, bandwidth: job.vbandwidth,
       durationSec, expectedSec, firstSegment, lastSegment,
     });
     console.log(JSON.stringify({
