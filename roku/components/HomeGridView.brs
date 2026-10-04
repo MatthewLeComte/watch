@@ -162,8 +162,8 @@ function BuildShelves(items as Object) as Object
   ' Continue Watching - items with position > 30 seconds
   continueItems = []
   for each item in items
-    pos = GetPlayPosition(item.itemId)
-    if pos > 30
+    secs = GetPlayPosition(item.itemId)
+    if secs > 30
       item.progress = GetPlayProgress(item)
       continueItems.Push(item)
     end if
@@ -232,17 +232,17 @@ function GetPlayPosition(itemId as String) as Integer
   ' Read from registry - stored by player
   reg = CreateObject("roRegistrySection", "watch")
   key = "pos_" + itemId
-  pos = reg.Read(key)
-  if pos = invalid then return 0
-  return Val(pos)
+  secs = reg.Read(key)
+  if secs = invalid then return 0
+  return Val(secs)
 end function
 
 function GetPlayProgress(item as Object) as Float
-  pos = GetPlayPosition(item.itemId)
+  secs = GetPlayPosition(item.itemId)
   if item.itemRuntime <> invalid and item.itemRuntime > 0
     duration = item.itemRuntime * 60
     if duration > 0
-      return pos / duration
+      return secs / duration
     end if
   end if
   return 0.0

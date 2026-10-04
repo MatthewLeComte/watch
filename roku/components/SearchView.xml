@@ -20,7 +20,7 @@
         translation="[80, 30]"
         width="1600"
         font="font:LargeBoldSystemFont"
-        text="Search Movies & Shows"
+        text="Search Movies &amp; Shows"
         color="0xFFFFFFFF"
       />
       <TextEditBox
