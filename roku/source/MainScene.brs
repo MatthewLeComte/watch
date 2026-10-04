@@ -42,6 +42,7 @@ sub Init()
   m.playTries = 0
   m.focused = invalid
   m.heroId = ""
+  m.shownId = ""
   m.pending = invalid
   m.cues = []
   m.capTask = invalid
@@ -160,14 +161,8 @@ sub FocusHero(it as Object)
   end for
   m.metaLabel.text = meta
   m.overviewLabel.text = it.itemOverview
-  if m.heroId <> it.itemId
-    StopHero()
-    m.backdropTick.control = "stop"
-    m.backdrop.opacity = 0
-    m.backdrop.uri = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/backdrop"
-    ' Same image decoded tiny and stretched: a soft glow that fills the area around the trailer
-    m.ambient.uri = m.backdrop.uri
-  end if
+  ' Moving is instant: only the text changes here. Images and the trailer follow once focus rests.
+  if m.heroId <> "" then StopHero()
   m.heroTimer.control = "stop"
   m.heroTimer.control = "start"
 end sub
@@ -186,6 +181,14 @@ end sub
 sub OnHeroTimer()
   if m.current <> "home" or m.focused = invalid then return
   it = m.focused
+  if it.itemId <> m.shownId
+    m.shownId = it.itemId
+    m.backdropTick.control = "stop"
+    m.backdrop.opacity = 0
+    m.backdrop.uri = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/backdrop"
+    ' Same image decoded tiny and stretched: a soft glow that fills the area around the trailer
+    m.ambient.uri = m.backdrop.uri
+  end if
   if it.itemTrailer <> "1" then return
   if it.itemId = m.heroId then return
   m.heroId = it.itemId
@@ -332,6 +335,11 @@ sub OnStartTimer()
   end if
   content.title = it.itemTitle
   content.HttpHeaders = ["Authorization:Bearer " + apiKey]
+  ' Seek previews: a BIF per title when one has been uploaded (the player ignores a missing one)
+  bif = base + "/v1/items/" + it.itemId + "/trick.bif?key=" + apiKey
+  content.SDBifUrl = bif
+  content.HDBifUrl = bif
+  content.FHDBifUrl = bif
   if it.itemSubs = "1"
     subUrl = base + "/v1/items/" + it.itemId + "/subtitles/en?key=" + apiKey
     content.SubtitleTracks = [{ Language: "eng", TrackName: subUrl, Description: "English" }]
