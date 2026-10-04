@@ -363,7 +363,7 @@ async function hashObject(env: Env, movieId: string, size: number): Promise<stri
   return openSubtitlesHash(size, new Uint8Array(await head.arrayBuffer()), new Uint8Array(await tail.arrayBuffer()));
 }
 
-async function storeImage(env: Env, movieId: string, kind: "poster" | "backdrop", url: string): Promise<string | null> {
+export async function storeImage(env: Env, movieId: string, kind: "poster" | "backdrop", url: string): Promise<string | null> {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return null;

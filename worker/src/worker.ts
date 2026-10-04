@@ -4,10 +4,11 @@ import { ingest, saveCache } from "./ingest";
 import { contentTypeFor, edgeCache, extOf, parseByteRange, parseReleaseName, srtToVtt } from "./lib";
 import { handleWatchMcp } from "./mcp";
 import { SOURCES, listSources } from "./sources";
-import { handleRelayPl, handleRelaySeg, handleRelaySave, handleRelaySaveStatus, handleHlsServe, handleSaveBatch, purgeJob, type SaveMessage } from "./relay";
+import { handleRelayPl, handleRelaySeg, handleRelaySave, handleRelaySaveStatus, handleHlsServe, handleSaveBatch, purgeJob, RENTAL_DAYS, type SaveMessage } from "./relay";
 import { TmdbUnconfigured } from "./sources/meta";
 import "./sources/registry";
 import { MIN_VIDEO_BYTES, checkUpload } from "./validate";
+import { enrichFromTmdb } from "./enrich";
 
 /** R2 requires every part except the last to be at least 5 MiB. 8 MiB matches that rule. */
 const PART = 8 * 1024 * 1024;
@@ -280,6 +281,7 @@ async function libraryRoutes(request: Request, env: Env, path: string): Promise<
   if (!rest && request.method === "PATCH") return patchItem(request, env, id);
   if (!rest && request.method === "DELETE") return deleteItem(env, id);
   if (rest === "keep" && request.method === "POST") return keepItem(env, id);
+  if (rest === "enrich" && request.method === "POST") return enrichSaved(env, id);
   if (rest === "complete" && request.method === "POST") return completeItem(env, id);
   if (rest === "replace" && request.method === "POST") return startReplace(request, env, id);
   if (rest === "replace/complete" && request.method === "POST") return completeReplace(request, env, id);
@@ -946,6 +948,27 @@ export async function deleteItem(env: Env, id: string): Promise<Response> {
   await env.watch.prepare("DELETE FROM upload WHERE movie_id = ?").bind(id).run();
   await env.watch.prepare("DELETE FROM movie WHERE id = ?").bind(id).run();
   return json({ ok: true });
+}
+
+/** Fill in metadata for a saved title (and its rental date if it never got one) from its TMDB id. */
+async function enrichSaved(env: Env, id: string): Promise<Response> {
+  const job = await env.watch
+    .prepare("SELECT tmdb_id, media_type, season, episode FROM hls_job WHERE movie_id = ?")
+    .bind(id)
+    .first<{ tmdb_id: number; media_type: string; season: number; episode: number }>();
+  if (!job) return json({ error: "not_a_saved_stream" }, 404);
+  const ok = await enrichFromTmdb(env, id, {
+    tmdbId: job.tmdb_id,
+    mediaType: job.media_type === "tv" ? "tv" : "movie",
+    season: job.season,
+    episode: job.episode,
+  });
+  if (!ok) return json({ error: "tmdb_lookup_failed" }, 502);
+  await env.watch
+    .prepare("UPDATE movie SET expires_at = ? WHERE id = ? AND expires_at IS NULL AND match_source = 'rive-save'")
+    .bind(new Date(Date.now() + RENTAL_DAYS * 86_400_000).toISOString(), id)
+    .run();
+  return json(await loadItem(env, id));
 }
 
 /** Turn a rental into a permanent title: it no longer expires. */

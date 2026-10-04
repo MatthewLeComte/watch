@@ -151,10 +151,15 @@ export type SaveMessage = {
   jobId: string;
   height: number;
   referer: string | null;
+  /** Absent means video. */
+  kind?: "audio";
   segs: { i: number; u: string }[];
 };
 
-type Variant = { height: number; bandwidth: number; uri: string };
+const audioName = (i: number) => `a${String(i).padStart(6, "0")}.ts`;
+
+type Variant = { height: number; bandwidth: number; uri: string; audio?: string };
+export type AudioRendition = { group: string; name: string; lang: string; isDefault: boolean; uri: string };
 
 /** 1080p-sane picker: never >1080p, prefer tallest within a 4GB estimate. */
 export const SAVE_BUDGET_BYTES = 4 * 1024 * 1024 * 1024;
@@ -192,14 +197,41 @@ export function parseMasterVariants(text: string): Variant[] {
       const bw = t.match(/BANDWIDTH=(\d+)/);
       cur.height = res ? Number(res[1]) : 0;
       cur.bandwidth = bw ? Number(bw[1]) : 0;
+      cur.audio = t.match(/AUDIO="([^"]+)"/)?.[1];
     } else if (t && !t.startsWith("#")) {
       if (cur.height !== undefined) {
-        out.push({ height: cur.height ?? 0, bandwidth: cur.bandwidth ?? 0, uri: t });
+        out.push({ height: cur.height ?? 0, bandwidth: cur.bandwidth ?? 0, uri: t, ...(cur.audio ? { audio: cur.audio } : {}) });
         cur = {};
       }
     }
   }
   return out;
+}
+
+/** Separate audio streams (#EXT-X-MEDIA TYPE=AUDIO). Online sources often keep sound out of the video chunks. */
+export function parseAudioRenditions(text: string): AudioRendition[] {
+  const out: AudioRendition[] = [];
+  for (const raw of text.split("\n")) {
+    const t = raw.trim();
+    if (!t.startsWith("#EXT-X-MEDIA:") || !/TYPE=AUDIO/.test(t)) continue;
+    const uri = t.match(/URI="([^"]+)"/)?.[1];
+    if (!uri) continue;
+    out.push({
+      group: t.match(/GROUP-ID="([^"]+)"/)?.[1] ?? "",
+      name: t.match(/NAME="([^"]*)"/)?.[1] ?? "Audio",
+      lang: (t.match(/LANGUAGE="([^"]*)"/)?.[1] ?? "").toLowerCase(),
+      isDefault: /DEFAULT=YES/.test(t),
+      uri,
+    });
+  }
+  return out;
+}
+
+/** The rendition to save for a variant: its group's English track, else the default, else the first. */
+export function pickAudio(renditions: AudioRendition[], group: string | undefined): AudioRendition | null {
+  const pool = group ? renditions.filter((r) => r.group === group) : renditions;
+  const list = pool.length ? pool : renditions;
+  return list.find((r) => r.lang.startsWith("en")) ?? list.find((r) => r.isDefault) ?? list[0] ?? null;
 }
 
 export function parseMediaSegments(text: string, base: string): { u: string; d: number }[] {
@@ -278,6 +310,7 @@ export async function handleRelaySave(request: Request, env: Env): Promise<Respo
   // Captured URL may already be a media playlist.
   let variantUrl = playlistUrl;
   let variantText = masterText;
+  let audioSegs: { u: string; d: number }[] = [];
   if (masterText.includes("#EXT-X-STREAM-INF")) {
     const base = playlistUrl.slice(0, playlistUrl.lastIndexOf("/") + 1);
     const variants = parseMasterVariants(masterText).map((v) => ({
@@ -291,6 +324,16 @@ export async function handleRelaySave(request: Request, env: Env): Promise<Respo
     const vRes = await fetch(variantUrl, { headers: relayHeaders(referer), signal: AbortSignal.timeout(15000) });
     if (!vRes.ok) return json({ error: "variant_fetch_failed" }, 502);
     variantText = await vRes.text();
+
+    // Sound is often a separate stream: save it too, or the title plays silent.
+    const audio = pickAudio(parseAudioRenditions(masterText), variants[pick]!.audio);
+    if (audio) {
+      const audioUrl = audio.uri.startsWith("http") ? audio.uri : new URL(audio.uri, base).href;
+      const aRes = await fetch(audioUrl, { headers: relayHeaders(referer), signal: AbortSignal.timeout(15000) });
+      if (aRes.ok) {
+        audioSegs = parseMediaSegments(await aRes.text(), audioUrl.slice(0, audioUrl.lastIndexOf("/") + 1));
+      }
+    }
   }
   const vBase = variantUrl.slice(0, variantUrl.lastIndexOf("/") + 1);
   const segs = parseMediaSegments(variantText, vBase);
@@ -315,9 +358,21 @@ export async function handleRelaySave(request: Request, env: Env): Promise<Respo
     .bind(
       jobId, `tmdb:${tmdbId}`, tmdbId, mediaType, season, episode,
       variantUrl, referer, vHeight, vBandwidth,
-      JSON.stringify(segs.map((s) => s.d)), segs.length, now, now,
+      JSON.stringify(segs.map((s) => s.d)), segs.length + audioSegs.length, now, now,
     )
     .run();
+
+  if (audioSegs.length) {
+    const lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:12", "#EXT-X-PLAYLIST-TYPE:VOD"];
+    audioSegs.forEach((a, i) => {
+      lines.push(`#EXTINF:${(a.d || 6).toFixed(3)},`);
+      lines.push(audioName(i));
+    });
+    lines.push("#EXT-X-ENDLIST");
+    await env.watch_bucket.put(`hls/${jobId}/audio/index.m3u8`, lines.join("\n") + "\n", {
+      httpMetadata: { contentType: "application/vnd.apple.mpegurl" },
+    });
+  }
 
   const BATCH = 20;
   const height = vHeight;
@@ -333,7 +388,20 @@ export async function handleRelaySave(request: Request, env: Env): Promise<Respo
     }
     await env.HLS_SAVE_QUEUE.sendBatch(msgs.map((m) => ({ body: m })));
   }
-  return json({ id: jobId, total: segs.length, status: "saving" }, 201);
+  for (let i = 0; i < audioSegs.length; i += BATCH * 5) {
+    const msgs: SaveMessage[] = [];
+    for (let j = i; j < Math.min(i + BATCH * 5, audioSegs.length); j += BATCH) {
+      msgs.push({
+        jobId,
+        height,
+        referer,
+        kind: "audio",
+        segs: audioSegs.slice(j, j + BATCH).map((a, k) => ({ i: j + k, u: a.u })),
+      });
+    }
+    await env.HLS_SAVE_QUEUE.sendBatch(msgs.map((m) => ({ body: m })));
+  }
+  return json({ id: jobId, total: segs.length + audioSegs.length, status: "saving" }, 201);
 }
 
 /** GET /v1/relay/save/:jobId — job status. */
@@ -378,8 +446,9 @@ export async function handleSaveBatch(msg: SaveMessage, env: Env): Promise<void>
           if (!res.ok || !res.body) return null;
           const buf = new Uint8Array(await res.arrayBuffer());
           if (!buf.length) return null;
-          await env.watch_bucket.put(`hls/${msg.jobId}/${msg.height}p/${segName(s.i)}`, buf, {
-            httpMetadata: { contentType: "video/mp2t" },
+          const key = msg.kind === "audio" ? `hls/${msg.jobId}/audio/${audioName(s.i)}` : `hls/${msg.jobId}/${msg.height}p/${segName(s.i)}`;
+          await env.watch_bucket.put(key, buf, {
+            httpMetadata: { contentType: msg.kind === "audio" ? "audio/mp2t" : "video/mp2t" },
           });
           return buf.length;
         } catch {
@@ -464,11 +533,14 @@ async function maybeFinalize(env: Env, jobId: string): Promise<void> {
     await env.watch_bucket.put(`${prefix}/index.m3u8`, lines.join("\n") + "\n", {
       httpMetadata: { contentType: "application/vnd.apple.mpegurl" },
     });
-    await env.watch_bucket.put(
-      `hls/${jobId}/master.m3u8`,
-      `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n${job.vheight}p/index.m3u8\n`,
-      { httpMetadata: { contentType: "application/vnd.apple.mpegurl" } },
-    );
+    const hasAudio = Boolean(await env.watch_bucket.head(`hls/${jobId}/audio/index.m3u8`));
+    const master = hasAudio
+      ? `#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="English",LANGUAGE="en",DEFAULT=YES,AUTOSELECT=YES,URI="audio/index.m3u8"\n` +
+        `#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,AUDIO="aud"\n${job.vheight}p/index.m3u8\n`
+      : `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n${job.vheight}p/index.m3u8\n`;
+    await env.watch_bucket.put(`hls/${jobId}/master.m3u8`, master, {
+      httpMetadata: { contentType: "application/vnd.apple.mpegurl" },
+    });
 
     const movieId = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -476,15 +548,25 @@ async function maybeFinalize(env: Env, jobId: string): Promise<void> {
     await env.watch
       .prepare(
         `INSERT INTO movie (id, filename, byte_size, content_type, ext, title, original_title, year, status,
-          match_source, match_note, runtime_min, hls_url, created_at, updated_at)
-         VALUES (?, ?, ?, 'video/mp4', 'mp4', ?, ?, NULL, 'ready', 'rive-save', ?, ?, ?, ?, ?)`,
+          match_source, match_note, runtime_min, hls_url, created_at, updated_at, expires_at)
+         VALUES (?, ?, ?, 'video/mp4', 'mp4', ?, ?, NULL, 'ready', 'rive-save', ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         movieId, `${label}.mp4`, job.bytes, label, label,
         `Saved ${job.media_type} ${job.tmdb_id} S${job.season}E${job.episode} ${job.vheight}p · ${check.note}`,
         Math.round(durationSec / 60), `/v1/hls/${jobId}/master.m3u8`, now, now,
+        // A saved stream is a rental until the user keeps it.
+        new Date(Date.now() + RENTAL_DAYS * 86_400_000).toISOString(),
       )
       .run();
+    // Title, poster, overview, genres and trailer come from TMDB; a miss leaves the title playable.
+    const { enrichFromTmdb } = await import("./enrich");
+    await enrichFromTmdb(env, movieId, {
+      tmdbId: job.tmdb_id,
+      mediaType: job.media_type === "tv" ? "tv" : "movie",
+      season: job.season,
+      episode: job.episode,
+    }).catch(() => false);
     await env.watch
       .prepare("UPDATE hls_job SET status = 'done', movie_id = ?, updated_at = ? WHERE id = ?")
       .bind(movieId, now, jobId)

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { rewritePlaylist, pickSaveVariant, parseMasterVariants, parseMediaSegments, SAVE_BUDGET_BYTES } from "../src/relay.ts";
+import { rewritePlaylist, pickSaveVariant, parseMasterVariants, parseMediaSegments, parseAudioRenditions, pickAudio, SAVE_BUDGET_BYTES } from "../src/relay.ts";
 
 const ORIGIN = "https://watch.cornerstonecoatings.com";
 const REF = "https://www.rivestream.app/embed?type=movie&id=533535";
@@ -89,5 +89,41 @@ describe("playlist parsing", () => {
       { u: "https://c.example.com/v/seg0.ts", d: 6 },
       { u: "https://c.example.com/v/seg1.ts", d: 4.5 },
     ]);
+  });
+});
+
+describe("separate audio streams", () => {
+  const master = [
+    "#EXTM3U",
+    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Spanish",LANGUAGE="es",DEFAULT=YES,URI="es/index.m3u8"',
+    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="English",LANGUAGE="en",DEFAULT=NO,URI="en/index.m3u8"',
+    '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",NAME="English",LANGUAGE="en",URI="subs.m3u8"',
+    '#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720,AUDIO="aud"',
+    "720/index.m3u8",
+    "",
+  ].join("\n");
+
+  it("reads the audio group off the variant and lists only audio renditions", () => {
+    assert.equal(parseMasterVariants(master)[0]!.audio, "aud");
+    const audio = parseAudioRenditions(master);
+    assert.equal(audio.length, 2);
+    assert.deepEqual(audio.map((a) => a.lang), ["es", "en"]);
+  });
+
+  it("prefers English over the default track", () => {
+    const pick = pickAudio(parseAudioRenditions(master), "aud");
+    assert.equal(pick?.uri, "en/index.m3u8");
+  });
+
+  it("falls back to the default, then the first, and returns null with none", () => {
+    const only = parseAudioRenditions(master.replace('LANGUAGE="en"', 'LANGUAGE="fr"'));
+    assert.equal(pickAudio(only, "aud")?.uri, "es/index.m3u8");
+    assert.equal(pickAudio([], undefined), null);
+  });
+
+  it("leaves a variant with muxed sound without an audio group", () => {
+    const muxed = ["#EXTM3U", "#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720", "720/index.m3u8", ""].join("\n");
+    assert.equal(parseMasterVariants(muxed)[0]!.audio, undefined);
+    assert.equal(parseAudioRenditions(muxed).length, 0);
   });
 });
