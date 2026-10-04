@@ -5,7 +5,7 @@ The stored trailers were saved at 480p and look soft on a TV. This downloads the
 for each unique trailer_key and PUTs it to the worker, which dedupes titles that share a trailer.
 Safe to re-run: a trailer is simply replaced again.
 
-Usage: WATCH_KEY=... hd-trailers.py [--workers 2] [--limit N]
+Usage: WATCH_KEY=... hd-trailers.py [--workers 2] [--limit N] [--titles "A|B"]
 Needs yt-dlp and ffmpeg.
 """
 import glob
@@ -54,18 +54,40 @@ def put_trailer(item, path, key):
     raise RuntimeError("upload failed after retries")
 
 
+def download(yt, work, fmt):
+    out = os.path.join(work, "t.%(ext)s")
+    subprocess.run(
+        ["yt-dlp", "--no-playlist", "-q", "--no-warnings", "-f", fmt, "--merge-output-format", "mp4", "-o", out,
+         f"https://www.youtube.com/watch?v={yt}"],
+        check=True,
+    )
+    files = glob.glob(os.path.join(work, "t.*"))
+    if not files:
+        raise RuntimeError("download produced no file")
+    return files[0]
+
+
+def transcode(src, work):
+    """H.264 + AAC at a size that fits one upload; used when the clean format is missing or too big."""
+    dst = os.path.join(work, "fallback.mp4")
+    subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", src, "-vf", "scale=-2:'min(1080,ih)'", "-c:v", "libx264",
+         "-crf", "23", "-preset", "veryfast", "-maxrate", "6M", "-bufsize", "12M", "-c:a", "aac", "-b:a", "128k",
+         "-movflags", "+faststart", dst],
+        check=True,
+    )
+    return dst
+
+
 def one(item, yt, key):
     with tempfile.TemporaryDirectory() as work:
-        out = os.path.join(work, "t.%(ext)s")
-        subprocess.run(
-            ["yt-dlp", "--no-playlist", "-q", "--no-warnings", "-f", FORMAT, "--merge-output-format", "mp4", "-o", out,
-             f"https://www.youtube.com/watch?v={yt}"],
-            check=True,
-        )
-        files = glob.glob(os.path.join(work, "t.*"))
-        if not files:
-            raise RuntimeError("download produced no file")
-        path = files[0]
+        try:
+            path = download(yt, work, FORMAT)
+        except subprocess.CalledProcessError:
+            # Clean 1080p H.264 not offered: take any format up to 1080p and transcode it.
+            path = transcode(download(yt, work, "bv*[height<=1080]+ba/b[height<=1080]/b"), work)
+        if os.path.getsize(path) > MAX_BYTES:
+            path = transcode(path, work)
         size = os.path.getsize(path)
         if size > MAX_BYTES:
             raise RuntimeError(f"{size / 1e6:.0f} MB is over the upload limit")
@@ -80,6 +102,7 @@ def main():
         raise SystemExit("WATCH_KEY is not set")
     workers = int(flags[flags.index("--workers") + 1]) if "--workers" in flags else 2
     limit = int(flags[flags.index("--limit") + 1]) if "--limit" in flags else 0
+    only = set(flags[flags.index("--titles") + 1].split("|")) if "--titles" in flags else None
 
     seen, todo = set(), []
     for it in library(key):
@@ -87,6 +110,8 @@ def main():
         if not yt or yt in seen:
             continue
         seen.add(yt)
+        if only and it["title"] not in only:
+            continue
         todo.append((it["id"], yt, it["title"]))
     if limit:
         todo = todo[:limit]
