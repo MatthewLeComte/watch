@@ -207,7 +207,6 @@ struct RiveCaptureView: View {
     @State private var saveJob: RelaySaveJob?
     @State private var saveTask: Task<Void, Never>?
     @State private var saveError: String?
-    @State private var confirmSave = false
 
     private var isTV: Bool { result.type == "series" || result.id.hasPrefix("meta:tv:") }
     private var saving: Bool { saveTask != nil }
@@ -246,16 +245,7 @@ struct RiveCaptureView: View {
                     Button("Close") { dismiss() }
                 }
             }
-            .confirmationDialog("Rent for 45 days?", isPresented: $confirmSave, titleVisibility: .visible) {
-                Button("Add to Library") { startServerSave() }
-            } message: {
-                Text("Saves \(heading) to your library as a 45 day rental. It deletes itself unless you press and hold it and choose Keep Permanently.")
-            }
         }
-    }
-
-    private var heading: String {
-        isTV ? "\(result.title) S\(season) E\(episode)" : result.title
     }
 
     private var ready: some View {
@@ -273,7 +263,7 @@ struct RiveCaptureView: View {
             Button { if let playlist { play(playlist) } } label: {
                 Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .controlSize(.large)
 
             if isTV {
@@ -290,19 +280,15 @@ struct RiveCaptureView: View {
                 .controlSize(.large)
             }
 
-            Button { confirmSave = true } label: {
-                if let job = saveJob, !job.isDone {
-                    Label(job.progress > 0 ? "Saving \(Int(job.progress * 100))%" : "Saving", systemImage: "icloud.and.arrow.up")
-                        .frame(maxWidth: .infinity)
-                } else if saved {
-                    Label("In Your Library", systemImage: "checkmark").frame(maxWidth: .infinity)
-                } else {
-                    Label("Add to Library", systemImage: "icloud.and.arrow.up").frame(maxWidth: .infinity)
-                }
+            // The same download button the library uses: label, ring and states.
+            Button { startServerSave() } label: {
+                Label(saved ? "Downloaded" : saving ? "Saving" : "Download", systemImage: saved ? "checkmark" : "arrow.down")
+                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .controlSize(.large)
             .disabled(saving || saved)
+            .overlay { SaveRing(progress: saving ? max(0.02, saveJob?.progress ?? 0) : nil) }
 
             if let saveError {
                 Text(saveError)

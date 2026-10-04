@@ -419,6 +419,17 @@ struct LibraryView: View {
             }
         }
         .frame(maxWidth: width, maxHeight: .infinity, alignment: .bottom)
+                                    .overlay(alignment: .bottomLeading) {
+                                        if let days = m.rentalDaysLeft {
+                                            Text(days == 0 ? "Leaves today" : "Leaves in \(days)d")
+                                                .font(.caption2.weight(.bold))
+                                                .padding(.horizontal, 7)
+                                                .padding(.vertical, 4)
+                                                .background(.black.opacity(0.7), in: Capsule())
+                                                .foregroundStyle(.white)
+                                                .padding(6)
+                                        }
+                                    }
     }
 
     private func billboardURL(_ movie: Movie) -> URL? {
