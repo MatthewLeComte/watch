@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component name="MainScene" extends="Scene">
   <children>
-    <Rectangle id="bg" width="1920" height="1080" color="0x000000FF" />
+    <Rectangle id="bg" width="1920" height="1080" color="0x101012FF" />
     <Poster
       id="ambient"
       translation="[640, 0]"
@@ -23,16 +23,15 @@
       notificationInterval="0.2"
       visible="false"
       />
-    <Group id="veil" translation="[640, 0]">
-      <Rectangle width="1280" height="620" color="0x000000FF" />
-      <Poster
-        id="backdrop"
-        width="1280"
-        height="620"
-        loadDisplayMode="scaleToZoom"
-        opacity="0"
-        />
-    </Group>
+    <Poster
+      id="backdrop"
+      translation="[640, 0]"
+      width="1280"
+      height="620"
+      loadDisplayMode="scaleToZoom"
+      opacity="0"
+      />
+    <Rectangle id="curtain" translation="[640, 0]" width="1280" height="620" color="0x101012FF" />
     <Poster
       id="scrim"
       translation="[640, 0]"
@@ -40,8 +39,8 @@
       height="620"
       uri="pkg:/images/scrim-left.png"
       />
-    <Rectangle id="coverLeft" width="640" height="760" color="0x000000FF" />
-    <Rectangle id="coverBottom" translation="[640, 620]" width="1280" height="160" color="0x000000FF" />
+    <Rectangle id="coverLeft" width="640" height="760" color="0x101012FF" />
+    <Rectangle id="coverBottom" translation="[640, 620]" width="1280" height="160" color="0x101012FF" />
     <Rectangle
       id="capBg"
       translation="[730, 505]"
@@ -112,6 +111,26 @@
       focusable="true"
       opacity="0"
       />
+    <Group id="loading" visible="false">
+      <Rectangle width="1920" height="1080" color="0x101012FF" />
+      <Label
+        id="loadTitle"
+        translation="[160, 440]"
+        width="1600"
+        horizAlign="center"
+        font="font:LargeBoldSystemFont"
+        color="0xFFFFFFFF"
+        />
+      <Label
+        id="loadText"
+        translation="[160, 520]"
+        width="1600"
+        horizAlign="center"
+        font="font:MediumSystemFont"
+        color="0xB8B8B8FF"
+        text="Starting"
+        />
+    </Group>
     <Video
       id="player"
       width="1920"
@@ -129,10 +148,10 @@
       visible="false"
       />
     <Timer id="heroTimer" duration="0.35" repeat="false" />
-    <Timer id="startTimer" duration="0.6" repeat="false" />
-    <Timer id="veilTick" duration="0.04" repeat="true" />
-    <Timer id="backdropTick" duration="0.04" repeat="true" />
+    <Timer id="startTimer" duration="0.4" repeat="false" />
+    <Timer id="fadeTick" duration="0.03" repeat="true" />
     <Timer id="rowsTick" duration="0.04" repeat="true" />
+    <Timer id="loadTick" duration="0.5" repeat="true" />
   </children>
   <script type="text/brightscript" uri="pkg:/source/MainScene.brs" />
 </component>

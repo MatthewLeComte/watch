@@ -1,5 +1,11 @@
 ' Home: the focused title's trailer fades in on top with captions, shelves scroll below.
 ' Selecting a title plays it full screen. No sub views.
+'
+' Moving between titles is one fixed sequence so nothing flickers:
+'   1. text updates at once and a curtain fades over the old picture
+'   2. once focus rests, the new backdrop loads under the curtain
+'   3. the curtain lifts to show the backdrop
+'   4. when the trailer is really playing, the backdrop fades out to reveal it
 
 sub Init()
   m.hero = m.top.findNode("hero")
@@ -11,18 +17,21 @@ sub Init()
   m.overviewLabel = m.top.findNode("overview")
   m.heroTimer = m.top.findNode("heroTimer")
   m.startTimer = m.top.findNode("startTimer")
-  m.veil = m.top.findNode("veil")
-  m.ambient = m.top.findNode("ambient")
+  m.fadeTick = m.top.findNode("fadeTick")
   m.rowsTick = m.top.findNode("rowsTick")
-  m.veilTick = m.top.findNode("veilTick")
-  m.backdropTick = m.top.findNode("backdropTick")
+  m.loadTick = m.top.findNode("loadTick")
+  m.ambient = m.top.findNode("ambient")
   m.backdrop = m.top.findNode("backdrop")
+  m.curtain = m.top.findNode("curtain")
   m.scrim = m.top.findNode("scrim")
   m.coverLeft = m.top.findNode("coverLeft")
   m.coverBottom = m.top.findNode("coverBottom")
   m.brand = m.top.findNode("brand")
   m.caption = m.top.findNode("caption")
   m.capBg = m.top.findNode("capBg")
+  m.loading = m.top.findNode("loading")
+  m.loadTitle = m.top.findNode("loadTitle")
+  m.loadText = m.top.findNode("loadText")
 
   m.player.visible = false
   m.player.ObserveField("state", "OnPlayerState")
@@ -30,12 +39,12 @@ sub Init()
   m.rows.ObserveField("rowItemSelected", "OnSelect")
   m.heroTimer.ObserveField("fire", "OnHeroTimer")
   m.startTimer.ObserveField("fire", "OnStartTimer")
+  m.fadeTick.ObserveField("fire", "OnFadeTick")
+  m.rowsTick.ObserveField("fire", "OnRowsTick")
+  m.loadTick.ObserveField("fire", "OnLoadTick")
   m.hero.ObserveField("state", "OnHeroState")
   m.hero.ObserveField("position", "OnHeroPosition")
   m.backdrop.ObserveField("loadStatus", "OnBackdropLoad")
-  m.veilTick.ObserveField("fire", "OnVeilTick")
-  m.rowsTick.ObserveField("fire", "OnRowsTick")
-  m.backdropTick.ObserveField("fire", "OnBackdropTick")
   StyleTrickPlay()
 
   m.current = "home"
@@ -46,6 +55,10 @@ sub Init()
   m.pending = invalid
   m.cues = []
   m.capTask = invalid
+  m.curtainTarget = 1.0
+  m.backdropTarget = 0.0
+  m.stopPending = false
+  m.dots = 0
   m.reg = CreateObject("roRegistrySection", "WatchCache")
 
   json = ReadChunks(m.reg, "catalog")
@@ -115,10 +128,10 @@ sub LoadCatalog(items)
 
   m.rows.content = root
   m.rows.SetFocus(true)
+  print "Shelves: " + StrI(root.GetChildCount())
   ' Shelves fade in rather than pop in
   m.rows.opacity = 0
   m.rowsTick.control = "start"
-  print "Shelves: " + StrI(root.GetChildCount())
   if root.GetChildCount() > 0 then FocusHero(root.GetChild(0).GetChild(0))
 end sub
 
@@ -138,7 +151,7 @@ sub OnFocusChanged()
   FocusHero(shelf.GetChild(at[1]))
 end sub
 
-' Backdrop and text update at once; the trailer fades in once focus has rested.
+' Step 1: text at once, curtain down over whatever is showing.
 sub FocusHero(it as Object)
   if it = invalid then return
   m.focused = it
@@ -161,36 +174,39 @@ sub FocusHero(it as Object)
   end for
   m.metaLabel.text = meta
   m.overviewLabel.text = it.itemOverview
-  ' Moving is instant: only the text changes here. Images and the trailer follow once focus rests.
-  if m.heroId <> "" then StopHero()
+  m.caption.text = ""
+  m.capBg.visible = false
+  if it.itemId <> m.shownId
+    m.shownId = ""
+    m.stopPending = true
+    m.curtainTarget = 1.0
+    m.fadeTick.control = "start"
+  end if
   m.heroTimer.control = "stop"
   m.heroTimer.control = "start"
 end sub
 
-sub StopHero()
-  m.veilTick.control = "stop"
-  m.hero.control = "stop"
-  m.hero.visible = false
-  m.veil.opacity = 1
-  m.heroId = ""
-  m.cues = []
-  m.caption.text = ""
-  m.capBg.visible = false
-end sub
-
+' Step 2: focus has rested. Load the new backdrop (and trailer) while the curtain hides it.
 sub OnHeroTimer()
   if m.current <> "home" or m.focused = invalid then return
   it = m.focused
-  if it.itemId <> m.shownId
-    m.shownId = it.itemId
-    m.backdropTick.control = "stop"
-    m.backdrop.opacity = 0
-    m.backdrop.uri = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/backdrop"
-    ' Same image decoded tiny and stretched: a soft glow that fills the area around the trailer
-    m.ambient.uri = m.backdrop.uri
+  if it.itemId = m.shownId then return
+  ' The old trailer stops once the curtain is down; never start the next one in the same instant
+  if m.stopPending
+    m.heroTimer.control = "start"
+    return
   end if
-  if it.itemTrailer <> "1" then return
-  if it.itemId = m.heroId then return
+  m.shownId = it.itemId
+  m.backdrop.opacity = 1
+  url = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/backdrop"
+  m.backdrop.uri = url
+  ' The same image decoded tiny and stretched: a soft glow around the trailer
+  m.ambient.uri = url
+  m.backdropTarget = 1.0
+  if it.itemTrailer = "1" then StartHero(it)
+end sub
+
+sub StartHero(it as Object)
   m.heroId = it.itemId
   apiKey = m.reg.Read("apiKey")
   base = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId
@@ -202,7 +218,7 @@ sub OnHeroTimer()
   m.hero.loop = true
   m.hero.content = content
   m.hero.control = "play"
-  ' Captions are drawn here, on top of the zoomed video, from the trailer's WebVTT
+  ' Captions are drawn here, on top of the video, from the trailer's WebVTT
   m.cues = []
   if it.itemCaps = "1"
     m.capTask = CreateObject("roSGNode", "CaptionTask")
@@ -213,27 +229,69 @@ sub OnHeroTimer()
   end if
 end sub
 
+sub StopHero()
+  m.hero.control = "stop"
+  m.hero.visible = false
+  m.cues = []
+  m.caption.text = ""
+  m.capBg.visible = false
+end sub
+
 sub OnCues()
   if m.capTask <> invalid then m.cues = m.capTask.cues
 end sub
 
-' The backdrop shows until the trailer is actually playing, then the video fades in over it
-sub OnHeroState()
-  if m.hero.state = "playing" and m.current = "home" and not m.hero.visible
-    m.hero.visible = true
-    m.veil.opacity = 1
-    m.veilTick.control = "start"
+' Step 3: the backdrop is ready (or failed), so lift the curtain.
+sub OnBackdropLoad()
+  status = m.backdrop.loadStatus
+  if (status = "ready" or status = "failed") and m.shownId <> ""
+    m.curtainTarget = 0.0
+    m.fadeTick.control = "start"
   end if
 end sub
 
-' The black veil (and the backdrop on it) fades out over the playing trailer
-sub OnVeilTick()
-  o = m.veil.opacity - 0.04
-  if o <= 0
-    o = 0
-    m.veilTick.control = "stop"
+' Step 4: the trailer is playing, so fade the backdrop away to reveal it.
+sub OnHeroState()
+  if m.hero.state = "playing" and m.current = "home" and m.heroId = m.shownId and m.heroId <> ""
+    m.hero.visible = true
+    m.curtainTarget = 0.0
+    m.backdropTarget = 0.0
+    m.fadeTick.control = "start"
   end if
-  m.veil.opacity = o
+end sub
+
+' One timer moves the curtain and the backdrop toward their targets.
+sub OnFadeTick()
+  settled = true
+  c = m.curtain.opacity
+  if c < m.curtainTarget
+    c = c + 0.14
+    if c > m.curtainTarget then c = m.curtainTarget
+  else if c > m.curtainTarget
+    c = c - 0.1
+    if c < m.curtainTarget then c = m.curtainTarget
+  end if
+  if c <> m.curtainTarget then settled = false
+  m.curtain.opacity = c
+
+  b = m.backdrop.opacity
+  if b < m.backdropTarget
+    b = b + 0.08
+    if b > m.backdropTarget then b = m.backdropTarget
+  else if b > m.backdropTarget
+    b = b - 0.05
+    if b < m.backdropTarget then b = m.backdropTarget
+  end if
+  if b <> m.backdropTarget then settled = false
+  m.backdrop.opacity = b
+
+  ' Once the curtain is fully down, the old trailer can stop without anyone seeing it
+  if m.stopPending and m.curtain.opacity >= 1
+    m.stopPending = false
+    m.heroId = ""
+    StopHero()
+  end if
+  if settled then m.fadeTick.control = "stop"
 end sub
 
 sub OnRowsTick()
@@ -243,22 +301,6 @@ sub OnRowsTick()
     m.rowsTick.control = "stop"
   end if
   m.rows.opacity = o
-end sub
-
-sub OnBackdropLoad()
-  if m.backdrop.loadStatus = "ready"
-    m.backdrop.opacity = 0
-    m.backdropTick.control = "start"
-  end if
-end sub
-
-sub OnBackdropTick()
-  o = m.backdrop.opacity + 0.06
-  if o >= 1
-    o = 1
-    m.backdropTick.control = "stop"
-  end if
-  m.backdrop.opacity = o
 end sub
 
 sub OnHeroPosition()
@@ -297,18 +339,42 @@ sub StartPlayback(it as Object)
   m.current = "starting"
   m.pending = it
   m.heroTimer.control = "stop"
+  m.stopPending = false
   StopHero()
+  m.heroId = ""
+  m.shownId = ""
   m.rows.visible = false
   SetHomeLayers(false)
+  ' Show the title straight away so the screen is never just black while the stream opens
+  m.loadTitle.text = it.itemTitle
+  m.dots = 0
+  m.loadText.text = "Starting"
+  m.loading.visible = true
+  m.loadTick.control = "start"
   m.keyCatcher.visible = true
   m.keyCatcher.SetFocus(true)
   ' The trailer and the movie cannot share the video decoder, so give it a moment to release
   m.startTimer.control = "start"
 end sub
 
+sub OnLoadTick()
+  m.dots = (m.dots + 1) mod 4
+  text = "Starting"
+  for i = 1 to m.dots
+    text = text + " ."
+  end for
+  m.loadText.text = text
+end sub
+
+sub HideLoading()
+  m.loadTick.control = "stop"
+  m.loading.visible = false
+end sub
+
 sub SetHomeLayers(on as Boolean)
   m.ambient.visible = on
-  m.veil.visible = on
+  m.backdrop.visible = on
+  m.curtain.visible = on
   m.scrim.visible = on
   m.coverLeft.visible = on
   m.coverBottom.visible = on
@@ -371,6 +437,7 @@ end sub
 sub OnPlayerState()
   print "Player state: " + m.player.state
   if m.player.state = "playing" and m.current = "player"
+    HideLoading()
     m.keyCatcher.SetFocus(true)
     ShowScrubBar()
   end if
@@ -396,12 +463,18 @@ end sub
 sub ReturnHome()
   m.player.control = "stop"
   m.player.visible = false
+  HideLoading()
   m.rows.visible = true
+  ' Come back behind a closed curtain so the home screen fades in cleanly
+  m.curtain.opacity = 1
+  m.curtainTarget = 1.0
+  m.backdrop.opacity = 0
+  m.backdropTarget = 0.0
   SetHomeLayers(true)
   m.keyCatcher.visible = false
   m.rows.SetFocus(true)
   m.current = "home"
-  ' Trailer resumes for whatever is focused
+  m.shownId = ""
   m.heroTimer.control = "start"
 end sub
 
