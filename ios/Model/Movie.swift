@@ -67,6 +67,10 @@ struct Movie: Codable, Hashable, Identifiable, Sendable {
     var updatedAt: String
     /// Set while the title is a rental: when it deletes itself. Nil means permanent.
     var expiresAt: String?
+    /// Episodes saved from an online source: the show, season and episode number.
+    var series: String?
+    var season: Int?
+    var episode: Int?
 
     var isRental: Bool { expiresAt != nil }
 

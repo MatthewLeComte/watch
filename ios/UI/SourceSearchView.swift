@@ -335,7 +335,11 @@ struct RiveCaptureView: View {
         var headers = ["User-Agent": "Watch/1"]
         if let referer = pageURL()?.absoluteString { headers["Referer"] = referer }
         let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-        let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+        let item = AVPlayerItem(asset: asset)
+        // Movies often list a 4K variant first; opening on it is what makes them slow to start.
+        // Capping at 1080p (what a saved copy keeps) lets playback begin on a variant that downloads fast.
+        item.preferredMaximumResolution = CGSize(width: 1920, height: 1080)
+        let player = AVPlayer(playerItem: item)
         player.allowsExternalPlayback = true
 
         let vc = DismissablePlayerVC()
