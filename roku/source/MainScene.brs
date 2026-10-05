@@ -173,6 +173,10 @@ sub LoadCatalog(items)
     tile.itemTitle = name
     tile.itemTile = "1"
     tile.itemEpCount = StrI(eps.Count()).Trim()
+    ' a show counts as opened when any episode was
+    for each ep in eps
+      if ep.itemPlayed > tile.itemPlayed then tile.itemPlayed = ep.itemPlayed
+    end for
     tile.itemRuntime = ""
     tile.itemYear = ""
     anyRental = false
@@ -188,6 +192,10 @@ sub LoadCatalog(items)
     end if
   end for
 
+  ' Every shelf lists the most recently opened first; never-opened titles keep their order after them
+  rented.SortBy("itemPlayed", "r")
+  animation.SortBy("itemPlayed", "r")
+  live.SortBy("itemPlayed", "r")
   root = CreateObject("roSGNode", "ContentNode")
   if resuming.Count() > 0 then AddShelf(root, "Continue Watching", resuming)
   if rented.Count() > 0 then AddShelf(root, "Rented", rented)
@@ -264,7 +272,18 @@ sub FocusHero(it as Object)
   if it.itemYear <> "" then parts.Push(it.itemYear)
   if it.itemRuntime <> ""
     mins = Val(it.itemRuntime)
-    parts.Push(StrI(Int(mins / 60)).Trim() + "h " + StrI(mins mod 60).Trim() + "m")
+    if Val(it.itemResume) > 30
+      ' Resume Watching: show what is left instead of the full runtime
+      left = Int(mins - Val(it.itemResume) / 60)
+      if left < 1 then left = 1
+      if left >= 60
+        parts.Push(StrI(Int(left / 60)).Trim() + "h " + StrI(left mod 60).Trim() + "m left")
+      else
+        parts.Push(StrI(left).Trim() + " min left")
+      end if
+    else
+      parts.Push(StrI(Int(mins / 60)).Trim() + "h " + StrI(mins mod 60).Trim() + "m")
+    end if
   end if
   if it.itemTile = "1"
     if it.itemEpCount = "1"
@@ -486,20 +505,42 @@ sub StyleTrickPlay()
 end sub
 
 sub ShowResumeChoice(it as Object)
-  dlg = CreateObject("roSGNode", "StandardMessageDialog")
-  dlg.title = it.itemTitle
-  dlg.message = ["You stopped at " + ClockText(Val(it.itemResume)) + "."]
-  dlg.buttons = ["Resume", "Start Over"]
-  dlg.ObserveFieldScoped("buttonSelected", "OnResumeChoice")
-  m.resumeDlg = dlg
+  m.top.findNode("resumeTitle").text = it.itemTitle
+  m.top.findNode("resumeText").text = "You stopped at " + ClockText(Val(it.itemResume)) + "."
   m.resumeItem = it
-  m.top.dialog = dlg
+  m.resumePick = 0
+  PaintResume()
+  m.top.findNode("resume").visible = true
+  m.current = "resume"
+  m.top.setFocus(true)
 end sub
 
-sub OnResumeChoice()
-  idx = m.resumeDlg.buttonSelected
-  m.resumeDlg.close = true
+' Highlight the chosen button: white bar with dark text, the other plain white text
+sub PaintResume()
+  hi = m.top.findNode("resumeHi")
+  b0 = m.top.findNode("resumeBtn0")
+  b1 = m.top.findNode("resumeBtn1")
+  if m.resumePick = 0
+    hi.translation = [620, 540]
+    b0.color = "0x000000FF"
+    b1.color = "0xFFFFFFFF"
+  else
+    hi.translation = [620, 614]
+    b0.color = "0xFFFFFFFF"
+    b1.color = "0x000000FF"
+  end if
+end sub
+
+sub CloseResume()
+  m.top.findNode("resume").visible = false
+  m.current = "home"
+  m.rows.SetFocus(true)
+end sub
+
+sub OnResumeChoice(idx as Integer)
   it = m.resumeItem
+  m.top.findNode("resume").visible = false
+  m.current = "home"
   if it = invalid then return
   if idx = 0
     StartPlayback(it, Val(it.itemResume))
@@ -714,6 +755,17 @@ function OnKeyEvent(k, p) as Boolean
   if k = "back" and (m.current = "player" or m.current = "starting")
     m.startTimer.control = "stop"
     ReturnHome()
+    return true
+  end if
+  if m.current = "resume"
+    if k = "up" or k = "down"
+      m.resumePick = 1 - m.resumePick
+      PaintResume()
+    else if k = "OK"
+      OnResumeChoice(m.resumePick)
+    else if k = "back"
+      CloseResume()
+    end if
     return true
   end if
   if m.current = "home"
