@@ -18,7 +18,7 @@ Sub Main()
     json = json + ",""itemYear"":""" + JsonEscape(it.itemYear) + """,""itemRuntime"":""" + JsonEscape(it.itemRuntime) + """"
     json = json + ",""itemTrailer"":""" + JsonEscape(it.itemTrailer) + """,""itemSaved"":""" + JsonEscape(it.itemSaved) + """"
     json = json + ",""itemOverview"":""" + JsonEscape(it.itemOverview) + """"
-    json = json + ",""itemCaps"":""" + JsonEscape(it.itemCaps) + """,""itemGenre"":""" + JsonEscape(it.itemGenre) + """,""itemAnim"":""" + JsonEscape(it.itemAnim) + """,""itemSubs"":""" + JsonEscape(it.itemSubs) + """,""itemSeries"":""" + JsonEscape(it.itemSeries) + """,""itemSeason"":""" + JsonEscape(it.itemSeason) + """,""itemEpisode"":""" + JsonEscape(it.itemEpisode) + """,""itemRental"":""" + JsonEscape(it.itemRental) + """}"
+    json = json + ",""itemCaps"":""" + JsonEscape(it.itemCaps) + """,""itemGenre"":""" + JsonEscape(it.itemGenre) + """,""itemAnim"":""" + JsonEscape(it.itemAnim) + """,""itemSubs"":""" + JsonEscape(it.itemSubs) + """,""itemResume"":""" + JsonEscape(it.itemResume) + """,""itemPlayed"":""" + JsonEscape(it.itemPlayed) + """,""itemSeries"":""" + JsonEscape(it.itemSeries) + """,""itemSeason"":""" + JsonEscape(it.itemSeason) + """,""itemEpisode"":""" + JsonEscape(it.itemEpisode) + """,""itemRental"":""" + JsonEscape(it.itemRental) + """}"
   end for
   json = json + "]"
   WriteChunks(reg, "catalog", json)
@@ -130,6 +130,11 @@ function FetchCatalog() as Object
       if i.season <> invalid then item.itemSeason = StrI(i.season).Trim()
       if i.episode <> invalid then item.itemEpisode = StrI(i.episode).Trim()
     end if
+    ' Resume Watching: where playback stopped and when the title was last opened
+    item.itemResume = ""
+    if i.resumeSeconds <> invalid and i.resumeSeconds > 0 then item.itemResume = StrI(Int(i.resumeSeconds)).Trim()
+    item.itemPlayed = ""
+    if type(i.lastPlayedAt) = "String" then item.itemPlayed = i.lastPlayedAt
     item.itemSubs = ""
     if type(i.subtitles) = "roArray" and i.subtitles.Count() > 0 then item.itemSubs = "1"
     item.itemCaps = ""

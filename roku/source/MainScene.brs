@@ -38,6 +38,7 @@ sub Init()
 
   m.player.visible = false
   m.player.ObserveField("state", "OnPlayerState")
+  m.player.ObserveField("position", "OnPlayPosition")
   m.rows.ObserveField("rowItemFocused", "OnFocusChanged")
   m.rows.ObserveField("rowItemSelected", "OnSelect")
   m.heroTimer.ObserveField("fire", "OnHeroTimer")
@@ -63,6 +64,12 @@ sub Init()
   m.stopPending = false
   m.dots = 0
   m.inSeries = ""
+  m.catalog = invalid
+  m.playItem = invalid
+  m.startAt = 0
+  m.lastSaved = 0
+  m.progTask = invalid
+  m.resumeDlg = invalid
   m.mainContent = invalid
   m.mainFocus = invalid
   m.shows = {}
@@ -75,6 +82,7 @@ sub Init()
   if json <> invalid and type(json) = "String" and Len(json) > 0
     j = ParseJSON(json)
     if j <> invalid and type(j) = "roArray" and j.Count() > 0
+      m.catalog = j
       LoadCatalog(j)
       print "Loaded " + StrI(j.Count()) + " from registry"
     else
@@ -114,6 +122,8 @@ function NewItem(parent as Object, item as Object) as Object
   n.AddField("itemSeries", "string", false)
   n.AddField("itemSeason", "string", false)
   n.AddField("itemEpisode", "string", false)
+  n.AddField("itemResume", "string", false)
+  n.AddField("itemPlayed", "string", false)
   n.AddField("itemTile", "string", false)
   n.AddField("itemEpCount", "string", false)
   n.SetFields(item)
@@ -127,6 +137,11 @@ sub LoadCatalog(items)
   rented = []
   animation = []
   live = []
+  resuming = []
+  for each item in items
+    if item.itemResume <> invalid and Val(item.itemResume) > 30 then resuming.Push(item)
+  end for
+  resuming.SortBy("itemPlayed", "r")
   m.shows = {}
   showNames = []
   for each item in items
@@ -174,6 +189,7 @@ sub LoadCatalog(items)
   end for
 
   root = CreateObject("roSGNode", "ContentNode")
+  if resuming.Count() > 0 then AddShelf(root, "Continue Watching", resuming)
   if rented.Count() > 0 then AddShelf(root, "Rented", rented)
   if animation.Count() > 0 then AddShelf(root, "Animation", animation)
   if live.Count() > 0 then AddShelf(root, "Live Action", live)
@@ -456,7 +472,11 @@ sub OnSelect()
     OpenSeries(it.itemSeries)
     return
   end if
-  StartPlayback(it)
+  if Val(it.itemResume) > 30
+    ShowResumeChoice(it)
+    return
+  end if
+  StartPlayback(it, 0)
 end sub
 
 sub StyleTrickPlay()
@@ -465,8 +485,94 @@ sub StyleTrickPlay()
   bar.filledBarImageUri = "pkg:/images/filled-bar.png"
 end sub
 
-sub StartPlayback(it as Object)
+sub ShowResumeChoice(it as Object)
+  dlg = CreateObject("roSGNode", "StandardMessageDialog")
+  dlg.title = it.itemTitle
+  dlg.message = ["You stopped at " + ClockText(Val(it.itemResume)) + "."]
+  dlg.buttons = ["Resume", "Start Over"]
+  dlg.ObserveFieldScoped("buttonSelected", "OnResumeChoice")
+  m.resumeDlg = dlg
+  m.resumeItem = it
+  m.top.dialog = dlg
+end sub
+
+sub OnResumeChoice()
+  idx = m.resumeDlg.buttonSelected
+  m.resumeDlg.close = true
+  it = m.resumeItem
+  if it = invalid then return
+  if idx = 0
+    StartPlayback(it, Val(it.itemResume))
+  else
+    ' Start over forgets the point on the server too
+    SendProgress(it.itemId, "DELETE", "")
+    SetLocalResume(it.itemId, "")
+    StartPlayback(it, 0)
+  end if
+end sub
+
+function ClockText(secs as Integer) as String
+  h = Int(secs / 3600)
+  mm = Int((secs mod 3600) / 60)
+  ss = secs mod 60
+  out = StrI(mm).Trim() + ":" + Right("0" + StrI(ss).Trim(), 2)
+  if h > 0 then out = StrI(h).Trim() + ":" + Right("0" + StrI(mm).Trim(), 2) + ":" + Right("0" + StrI(ss).Trim(), 2)
+  return out
+end function
+
+' One resume-point update to the library (PUT position and duration, or DELETE to start over).
+sub SendProgress(id as String, method as String, body as String)
+  t = CreateObject("roSGNode", "ProgressTask")
+  t.url = "https://watch.cornerstonecoatings.com/v1/items/" + id + "/progress"
+  t.key = m.reg.Read("apiKey")
+  t.method = method
+  t.body = body
+  t.control = "RUN"
+  m.progTask = t
+end sub
+
+' Keep the in-memory catalog current so Continue Watching reflects what was just watched.
+sub SetLocalResume(id as String, resume as String)
+  if m.catalog = invalid then return
+  now = CreateObject("roDateTime").ToISOString()
+  for each entry in m.catalog
+    if entry.itemId = id
+      entry.itemResume = resume
+      entry.itemPlayed = now
+    end if
+  end for
+end sub
+
+sub SaveProgress(finishedHint as Boolean)
+  it = m.playItem
+  if it = invalid then return
+  here = m.player.position
+  dur = m.player.duration
+  if here = invalid then return
+  if dur = invalid then dur = 0
+  at = Int(here)
+  body = "{""position"":" + StrI(at).Trim() + ",""duration"":" + StrI(Int(dur)).Trim() + "}"
+  SendProgress(it.itemId, "PUT", body)
+  m.lastSaved = at
+  done = (finishedHint or (dur > 0 and (at >= dur * 0.95 or dur - at < 120)))
+  if at >= 30 and not done
+    SetLocalResume(it.itemId, StrI(at).Trim())
+  else
+    SetLocalResume(it.itemId, "")
+  end if
+end sub
+
+sub OnPlayPosition()
+  ' While watching, save the point about every 30 seconds
+  if m.current <> "player" or m.playItem = invalid then return
+  if m.player.position - m.lastSaved >= 30 then SaveProgress(false)
+end sub
+
+sub StartPlayback(it as Object, startAt as Integer)
   if m.current <> "home" then return
+  m.playItem = it
+  m.startAt = startAt
+  m.lastSaved = startAt
   print "Playing: " + it.itemId
   m.current = "starting"
   m.pending = it
@@ -547,6 +653,7 @@ sub OnStartTimer()
     content.SubtitleTracks = [{ Language: "eng", TrackName: subUrl, Description: "English" }]
     m.player.globalCaptionMode = "On"
   end if
+  if m.startAt > 0 then content.PlayStart = m.startAt
   m.player.content = content
   m.player.visible = true
   m.current = "player"
@@ -581,6 +688,9 @@ sub OnPlayerState()
 end sub
 
 sub ReturnHome()
+  wasPlaying = (m.playItem <> invalid and m.current = "player")
+  if wasPlaying then SaveProgress(m.player.state = "finished")
+  m.playItem = invalid
   m.player.control = "stop"
   m.player.visible = false
   HideLoading()
@@ -595,6 +705,7 @@ sub ReturnHome()
   m.rows.SetFocus(true)
   m.current = "home"
   m.shownId = ""
+  if wasPlaying and m.catalog <> invalid then LoadCatalog(m.catalog)
   m.heroTimer.control = "start"
 end sub
 

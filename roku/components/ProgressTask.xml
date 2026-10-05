@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="ProgressTask" extends="Task">
+  <interface>
+    <field id="url" type="string" />
+    <field id="key" type="string" />
+    <field id="method" type="string" />
+    <field id="body" type="string" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/ProgressTask.brs" />
+</component>
