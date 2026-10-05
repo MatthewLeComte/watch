@@ -302,6 +302,18 @@ export async function handleRelaySave(request: Request, env: Env): Promise<Respo
   if (!playlistUrl || bad(playlistUrl) || !tmdbId) return json({ error: "playlistUrl_tmdbId_required" }, 400);
   if (!env.HLS_SAVE_QUEUE) return json({ error: "save_queue_unconfigured" }, 503);
 
+  // The same movie or episode is only ever saved once; asking again returns the title that exists.
+  const seasonN = Number(body.season) || 1;
+  const episodeN = Number(body.episode) || 1;
+  const existing = await env.watch
+    .prepare(
+      `SELECT j.id, j.movie_id FROM hls_job j JOIN movie m ON m.id = j.movie_id
+         WHERE j.tmdb_id = ? AND j.media_type = ? AND j.season = ? AND j.episode = ? AND j.status = 'done' LIMIT 1`,
+    )
+    .bind(tmdbId, mediaType, mediaType === "tv" ? seasonN : 1, mediaType === "tv" ? episodeN : 1)
+    .first<{ id: string; movie_id: string }>();
+  if (existing) return json({ id: existing.id, total: 0, done: 0, status: "done", movie_id: existing.movie_id });
+
   const masterRes = await fetch(playlistUrl, { headers: relayHeaders(referer), signal: AbortSignal.timeout(15000) });
   if (!masterRes.ok) return json({ error: "playlist_fetch_failed" }, 502);
   const masterText = await masterRes.text();

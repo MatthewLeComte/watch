@@ -14,6 +14,10 @@ import { enrichFromTmdb } from "./enrich";
 const PART = 8 * 1024 * 1024;
 
 type MovieRow = {
+  /** From the saved-stream job, present for titles saved from an online source. */
+  job_media_type?: string | null;
+  job_season?: number | null;
+  job_episode?: number | null;
   id: string;
   filename: string;
   byte_size: number;
@@ -520,7 +524,11 @@ export async function listItems(env: Env): Promise<Response> {
   await ensureTrailerSchema(env);
   // Only finished, validated titles are in the library; uploads in flight and expired rentals stay out.
   const rows = await env.watch
-    .prepare("SELECT * FROM movie WHERE status = 'ready' AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC")
+    .prepare(
+      `SELECT m.*, j.media_type AS job_media_type, j.season AS job_season, j.episode AS job_episode
+         FROM movie m LEFT JOIN hls_job j ON j.movie_id = m.id
+         WHERE m.status = 'ready' AND (m.expires_at IS NULL OR m.expires_at > ?) ORDER BY m.created_at DESC`,
+    )
     .bind(new Date().toISOString())
     .all<MovieRow>();
   const subs = await env.watch.prepare("SELECT movie_id, lang, label, source, release_name, hearing_impaired FROM subtitle").all<
@@ -1415,7 +1423,13 @@ async function putSubtitle(request: Request, env: Env, id: string, lang: string)
 }
 
 async function loadItem(env: Env, id: string) {
-  const row = await env.watch.prepare("SELECT * FROM movie WHERE id = ?").bind(id).first<MovieRow>();
+  const row = await env.watch
+    .prepare(
+      `SELECT m.*, j.media_type AS job_media_type, j.season AS job_season, j.episode AS job_episode
+         FROM movie m LEFT JOIN hls_job j ON j.movie_id = m.id WHERE m.id = ?`,
+    )
+    .bind(id)
+    .first<MovieRow>();
   if (!row) return null;
   const subs = await env.watch
     .prepare("SELECT lang, label, source, release_name, hearing_impaired FROM subtitle WHERE movie_id = ?")
@@ -1474,5 +1488,10 @@ function toItem(row: MovieRow, subs: SubRow[]) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     expiresAt: row.expires_at ?? null,
+    // Episodes saved from an online source: the app groups them by series, then season.
+    mediaType: row.job_media_type ?? null,
+    series: row.job_media_type === "tv" ? row.original_title : null,
+    season: row.job_media_type === "tv" ? (row.job_season ?? null) : null,
+    episode: row.job_media_type === "tv" ? (row.job_episode ?? null) : null,
   };
 }
