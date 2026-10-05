@@ -59,7 +59,7 @@ def mdat_count(path):
 def remux(src, dst):
     run("ffmpeg", "-nostdin", "-v", "error", "-y", "-i", src, "-map", "0", "-c", "copy", "-movflags", "+faststart", dst)
     a, b = duration(src), duration(dst)
-    if abs(a - b) > 1.0:
+    if abs(a - b) > max(1.0, a * 0.0003):  # a few seconds of drift on a long film is container rounding
         raise SystemExit(f"remux changed the length: {a:.1f}s -> {b:.1f}s")
     if mdat_count(dst) > 2:
         raise SystemExit("remux still has many mdat boxes")

@@ -2,6 +2,7 @@ import { cinemetaMeta } from "./cinemeta";
 import type { Env } from "./env";
 import { ingest, saveCache } from "./ingest";
 import { contentTypeFor, edgeCache, extOf, parseByteRange, parseReleaseName, srtToVtt } from "./lib";
+import { findSplitData, runToEnd, splitAround, type Piece } from "./layout";
 import { handleWatchMcp } from "./mcp";
 import { SOURCES, listSources } from "./sources";
 import { handleRelayPl, handleRelaySeg, handleRelaySave, handleRelaySaveStatus, handleHlsServe, handleSaveBatch, purgeJob, RENTAL_DAYS, type SaveMessage } from "./relay";
@@ -1040,11 +1041,101 @@ async function sweepExpired(env: Env): Promise<void> {
   }
 }
 
+interface MediaRow {
+  byte_size: number;
+  content_type: string;
+  status: string;
+  download_url: string | null;
+  stream_uid: string | null;
+  mdat_off: number | null;
+  layout_etag: string | null;
+  /** False when the layout columns are not there yet: the file is then served exactly as stored. */
+  layout: boolean;
+}
+
+async function mediaRow(env: Env, id: string): Promise<MediaRow | null> {
+  const base = "byte_size, content_type, status, download_url, stream_uid";
+  try {
+    const row = await env.watch
+      .prepare(`SELECT ${base}, mdat_off, layout_etag FROM movie WHERE id = ?`)
+      .bind(id)
+      .first<Omit<MediaRow, "layout">>();
+    return row ? { ...row, layout: true } : null;
+  } catch {
+    const row = await env.watch
+      .prepare(`SELECT ${base} FROM movie WHERE id = ?`)
+      .bind(id)
+      .first<Omit<MediaRow, "layout" | "mdat_off" | "layout_etag">>();
+    return row ? { ...row, mdat_off: null, layout_etag: null, layout: false } : null;
+  }
+}
+
+/** Where this stored file's first data block starts if it has to be relabelled, else -1. Worked out once
+ * per stored file from a few tiny reads and remembered; a replaced file has a new etag and is read again. */
+async function splitDataOffset(env: Env, id: string, movie: MediaRow, obj: R2Object): Promise<number> {
+  if (movie.layout_etag === obj.etag && movie.mdat_off !== null) return movie.mdat_off;
+  const at = await findSplitData(async (offset, length) => {
+    const part = await env.watch_bucket.get(`video/${id}`, { range: { offset, length } });
+    return part ? new Uint8Array(await part.arrayBuffer()) : null;
+  }, obj.size);
+  await env.watch.prepare("UPDATE movie SET mdat_off = ?, layout_etag = ? WHERE id = ?").bind(at, obj.etag, id).run();
+  return at;
+}
+
+/** The stored ranges and replacement bytes of `pieces`, in order, as one body of exactly `length` bytes. */
+function joined(env: Env, id: string, pieces: Piece[], length: number): ReadableStream {
+  const { readable, writable } = new FixedLengthStream(length);
+  void (async () => {
+    try {
+      for (let i = 0; i < pieces.length; i++) {
+        const piece = pieces[i]!;
+        const last = i === pieces.length - 1;
+        if ("bytes" in piece) {
+          const writer = writable.getWriter();
+          await writer.write(piece.bytes);
+          if (last) await writer.close();
+          writer.releaseLock();
+        } else {
+          const part = await env.watch_bucket.get(`video/${id}`, {
+            range: { offset: piece.from, length: piece.to - piece.from },
+          });
+          if (!part) throw new Error("missing_object");
+          await part.body.pipeTo(writable, { preventClose: !last });
+        }
+      }
+    } catch (err) {
+      await writable.abort(err).catch(() => {});
+    }
+  })();
+  return readable;
+}
+
+/** The requested bytes of a stored video. A file stored as thousands of data blocks is presented as one
+ * block so players open it at once (see layout.ts); every other request streams straight from storage. */
+async function playableBody(
+  env: Env,
+  id: string,
+  movie: MediaRow,
+  obj: R2ObjectBody,
+  offset: number,
+  length: number,
+): Promise<ReadableStream> {
+  if (!movie.layout) return obj.body;
+  let at = -1;
+  try {
+    at = await splitDataOffset(env, id, movie, obj);
+  } catch {
+    return obj.body; // never let this get in the way of playing the file as stored
+  }
+  if (at < 0) return obj.body;
+  const pieces = splitAround(offset, length, at, runToEnd(at, obj.size));
+  if (pieces.length === 1 && "from" in pieces[0]!) return obj.body;
+  await obj.body.cancel();
+  return joined(env, id, pieces, length);
+}
+
 async function media(request: Request, env: Env, id: string): Promise<Response> {
-  const movie = await env.watch
-    .prepare("SELECT byte_size, content_type, status, download_url, stream_uid FROM movie WHERE id = ?")
-    .bind(id)
-    .first<{ byte_size: number; content_type: string; status: string; download_url: string | null; stream_uid: string | null }>();
+  const movie = await mediaRow(env, id);
   if (!movie || movie.status === "uploading" || movie.status === "processing") return json({ error: "not_found" }, 404);
   const headers = new Headers();
   headers.set("content-type", movie.content_type);
@@ -1064,7 +1155,7 @@ async function media(request: Request, env: Env, id: string): Promise<Response> 
     const obj = await env.watch_bucket.get(`video/${id}`);
     if (obj) {
       headers.set("content-length", String(obj.size));
-      return new Response(obj.body, { status: 200, headers });
+      return new Response(await playableBody(env, id, movie, obj, 0, obj.size), { status: 200, headers });
     }
     // Original purged after Stream processing — serve the Stream copy.
     if (movie.download_url) return Response.redirect(movie.download_url, 302);
@@ -1085,7 +1176,7 @@ async function media(request: Request, env: Env, id: string): Promise<Response> 
     const end = range.offset + range.length - 1;
     headers.set("content-range", `bytes ${range.offset}-${end}/${movie.byte_size}`);
     headers.set("content-length", String(range.length));
-    return new Response(obj.body, { status: 206, headers });
+    return new Response(await playableBody(env, id, movie, obj, range.offset, range.length), { status: 206, headers });
   }
   // Original purged: proxy the byte range from the Stream download so
   // existing players keep working without the R2 original.

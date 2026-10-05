@@ -10,7 +10,7 @@ Per title, only what is missing is done:
   - build the seek-preview (BIF) and upload it.
 A title that is already fixed is skipped without being downloaded at all.
 
-Usage: WATCH_KEY=... process-all.py [--limit N]
+Usage: WATCH_KEY=... process-all.py [--limit N] [--reverse] [--only TITLE]
 """
 import http.client
 import importlib.util
@@ -77,6 +77,11 @@ def main():
     items = json.loads(rmx.fetch(prep.BASE + "/v1/items", {"Authorization": f"Bearer {key}"}))["items"]
     # Saved streams are HLS chunks with no single file; everything else has one.
     todo = [i for i in items if not i.get("hlsUrl")]
+    if "--only" in sys.argv:
+        needle = sys.argv[sys.argv.index("--only") + 1].lower()
+        todo = [i for i in todo if needle in i["title"].lower()]
+    if "--reverse" in sys.argv:
+        todo.reverse()  # a second run from the far end, so two runs meet in the middle
     print(f"{len(todo)} titles in the library", flush=True)
 
     fixed = skipped = failed = 0
