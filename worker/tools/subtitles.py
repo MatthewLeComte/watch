@@ -17,7 +17,8 @@ Stremio (no account, no key), looked up by IMDb id. A title is left without subt
 given a track that does not fit.
 
 Usage: WATCH_KEY=... subtitles.py [--only TITLE] [--limit N] [--jobs N] [--dry] [--report FILE]
-Needs ffmpeg and numpy. With --dry nothing is uploaded or removed.
+Needs ffmpeg and numpy. With --dry nothing is uploaded or removed. A run that is given the report of an
+earlier run carries on from it: titles already settled there are not checked again.
 """
 import http.client
 import json
@@ -493,10 +494,16 @@ def main():
         todo = [i for i in todo if only in i["title"].lower()]
     if limit:
         todo = todo[:limit]
+    rows = []
+    if report and os.path.exists(report):
+        rows = [r for r in json.load(open(report)) if r.get("action") != "failed"]
+        settled = {r["id"] for r in rows}
+        todo = [i for i in todo if i["id"] not in settled]
     print(f"{len(todo)} movies to check{' (dry run)' if dry else ''}", flush=True)
 
-    rows = []
     counts = {}
+    for r in rows:
+        counts[r["action"]] = counts.get(r["action"], 0) + 1
     start = time.time()
     with ThreadPoolExecutor(jobs) as pool:
         for n, out in enumerate(pool.map(lambda i: handle(i, key, dry), todo), 1):
