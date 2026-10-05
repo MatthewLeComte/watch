@@ -107,18 +107,33 @@ function NewItem(parent as Object, item as Object) as Object
   n.AddField("itemAnim", "string", false)
   n.AddField("itemSubs", "string", false)
   n.AddField("itemRental", "string", false)
+  n.AddField("itemSeries", "string", false)
+  n.AddField("itemSeason", "string", false)
+  n.AddField("itemEpisode", "string", false)
   n.SetFields(item)
   return n
 end function
 
-' Shelves: Rented, then Animation, then Live Action.
+' Shelves: rented movies, then each series season, then Animation, then Live Action.
 sub LoadCatalog(items)
   print "LoadCatalog: " + StrI(items.Count()) + " items"
   rented = []
   animation = []
   live = []
+  seasons = {}
+  seasonKeys = []
   for each item in items
-    if item.itemRental = "1"
+    if item.itemSeries <> invalid and item.itemSeries <> ""
+      ' Zero-padded so the keys sort as season order
+      pad = "00" + item.itemSeason
+      key = item.itemSeries + " | " + Right(pad, 2)
+      if seasons[key] = invalid
+        seasons[key] = []
+        seasonKeys.Push(key)
+      end if
+      item.episodeNum = Val(item.itemEpisode)
+      seasons[key].Push(item)
+    else if item.itemRental = "1"
       rented.Push(item)
     else if item.itemAnim = "1"
       animation.Push(item)
@@ -129,6 +144,14 @@ sub LoadCatalog(items)
 
   root = CreateObject("roSGNode", "ContentNode")
   if rented.Count() > 0 then AddShelf(root, "Rented", rented)
+  seasonKeys.Sort()
+  for each key in seasonKeys
+    group = seasons[key]
+    group.SortBy("episodeNum")
+    label = group[0].itemSeries + "  -  Season " + group[0].itemSeason
+    if group[0].itemRental = "1" then label = "Rented  -  " + label
+    AddShelf(root, label, group)
+  end for
   if animation.Count() > 0 then AddShelf(root, "Animation", animation)
   if live.Count() > 0 then AddShelf(root, "Live Action", live)
 

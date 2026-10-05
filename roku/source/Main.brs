@@ -18,7 +18,7 @@ Sub Main()
     json = json + ",""itemYear"":""" + JsonEscape(it.itemYear) + """,""itemRuntime"":""" + JsonEscape(it.itemRuntime) + """"
     json = json + ",""itemTrailer"":""" + JsonEscape(it.itemTrailer) + """,""itemSaved"":""" + JsonEscape(it.itemSaved) + """"
     json = json + ",""itemOverview"":""" + JsonEscape(it.itemOverview) + """"
-    json = json + ",""itemCaps"":""" + JsonEscape(it.itemCaps) + """,""itemGenre"":""" + JsonEscape(it.itemGenre) + """,""itemAnim"":""" + JsonEscape(it.itemAnim) + """,""itemSubs"":""" + JsonEscape(it.itemSubs) + """,""itemRental"":""" + JsonEscape(it.itemRental) + """}"
+    json = json + ",""itemCaps"":""" + JsonEscape(it.itemCaps) + """,""itemGenre"":""" + JsonEscape(it.itemGenre) + """,""itemAnim"":""" + JsonEscape(it.itemAnim) + """,""itemSubs"":""" + JsonEscape(it.itemSubs) + """,""itemSeries"":""" + JsonEscape(it.itemSeries) + """,""itemSeason"":""" + JsonEscape(it.itemSeason) + """,""itemEpisode"":""" + JsonEscape(it.itemEpisode) + """,""itemRental"":""" + JsonEscape(it.itemRental) + """}"
   end for
   json = json + "]"
   WriteChunks(reg, "catalog", json)
@@ -121,6 +121,15 @@ function FetchCatalog() as Object
     if type(i.trailerFile) = "String" and Len(i.trailerFile) > 0 then item.itemTrailer = "1"
     item.itemOverview = ""
     if type(i.overview) = "String" then item.itemOverview = Left(i.overview, 180)
+    ' Episodes saved from an online source group by show, then season
+    item.itemSeries = ""
+    item.itemSeason = ""
+    item.itemEpisode = ""
+    if type(i.series) = "String" and Len(i.series) > 0
+      item.itemSeries = i.series
+      if i.season <> invalid then item.itemSeason = StrI(i.season).Trim()
+      if i.episode <> invalid then item.itemEpisode = StrI(i.episode).Trim()
+    end if
     item.itemSubs = ""
     if type(i.subtitles) = "roArray" and i.subtitles.Count() > 0 then item.itemSubs = "1"
     item.itemCaps = ""

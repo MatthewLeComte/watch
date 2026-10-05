@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component name="MainScene" extends="Scene">
   <children>
-    <Rectangle id="bg" width="1920" height="1080" color="0x101012FF" />
+    <Rectangle id="bg" width="1920" height="1080" color="0x0C0C0EFF" />
     <Poster
       id="ambient"
       translation="[640, 0]"
@@ -31,7 +31,7 @@
       loadDisplayMode="scaleToZoom"
       opacity="0"
       />
-    <Rectangle id="curtain" translation="[640, 0]" width="1280" height="620" color="0x101012FF" />
+    <Rectangle id="curtain" translation="[640, 0]" width="1280" height="620" color="0x0C0C0EFF" />
     <Poster
       id="scrim"
       translation="[640, 0]"
@@ -39,8 +39,8 @@
       height="620"
       uri="pkg:/images/scrim-left.png"
       />
-    <Rectangle id="coverLeft" width="640" height="760" color="0x101012FF" />
-    <Rectangle id="coverBottom" translation="[640, 620]" width="1280" height="160" color="0x101012FF" />
+    <Rectangle id="coverLeft" width="640" height="760" color="0x0C0C0EFF" />
+    <Rectangle id="coverBottom" translation="[640, 620]" width="1280" height="160" color="0x0C0C0EFF" />
     <Rectangle
       id="capBg"
       translation="[730, 505]"
@@ -99,8 +99,8 @@
     <RowList
       id="rows"
       translation="[60, 610]"
-      itemSize="[1800, 400]"
-      rowItemSize="[[200, 300]]"
+      itemSize="[1800, 420]"
+      rowItemSize="[[210, 315]]"
       rowItemSpacing="[[16, 0]]"
       rowLabelOffset="[[0, 8]]"
       rowLabelFont="font:MediumBoldSystemFont"
@@ -114,7 +114,7 @@
     <Poster id="muteRing" translation="[1808, 34]" width="80" height="80" uri="pkg:/images/ring.png" visible="false" />
     <Poster id="muteIcon" translation="[1816, 42]" width="64" height="64" uri="pkg:/images/sound-on.png" />
     <Group id="loading" visible="false">
-      <Rectangle width="1920" height="1080" color="0x101012FF" />
+      <Rectangle width="1920" height="1080" color="0x0C0C0EFF" />
       <Label
         id="loadTitle"
         translation="[160, 440]"
