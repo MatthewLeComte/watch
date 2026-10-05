@@ -67,13 +67,23 @@ def download(yt, work, fmt):
     return files[0]
 
 
-def transcode(src, work):
-    """H.264 + AAC at a size that fits one upload; used when the clean format is missing or too big."""
+def duration(path):
+    out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path])
+    return float(out.strip())
+
+
+def transcode(src, work, budget=None):
+    """H.264 + AAC at a size that fits one upload; used when the clean format is missing or too big.
+
+    With a budget (bytes) the video bitrate is set so a long trailer still lands under it."""
     dst = os.path.join(work, "fallback.mp4")
+    rate = ["-crf", "23", "-maxrate", "6M", "-bufsize", "12M"]
+    if budget:
+        video = max(800_000, int(budget * 8 / duration(src)) - 160_000)
+        rate = ["-b:v", str(video), "-maxrate", str(video), "-bufsize", str(video * 2)]
     subprocess.run(
         ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", src, "-vf", "scale=-2:'min(1080,ih)'", "-c:v", "libx264",
-         "-crf", "23", "-preset", "veryfast", "-maxrate", "6M", "-bufsize", "12M", "-c:a", "aac", "-b:a", "128k",
-         "-movflags", "+faststart", dst],
+         "-preset", "veryfast", *rate, "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", dst],
         check=True,
     )
     return dst
@@ -88,6 +98,9 @@ def one(item, yt, key):
             path = transcode(download(yt, work, "bv*[height<=1080]+ba/b[height<=1080]/b"), work)
         if os.path.getsize(path) > MAX_BYTES:
             path = transcode(path, work)
+        if os.path.getsize(path) > MAX_BYTES:
+            # Long trailer: set the bitrate from the length so it fits the upload limit.
+            path = transcode(path, work, budget=int(MAX_BYTES * 0.92))
         size = os.path.getsize(path)
         if size > MAX_BYTES:
             raise RuntimeError(f"{size / 1e6:.0f} MB is over the upload limit")
