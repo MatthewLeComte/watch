@@ -62,6 +62,10 @@ sub Init()
   m.backdropTarget = 0.0
   m.stopPending = false
   m.dots = 0
+  m.inSeries = ""
+  m.mainContent = invalid
+  m.mainFocus = invalid
+  m.shows = {}
   m.reg = CreateObject("roRegistrySection", "WatchCache")
   ' Trailers play with sound. Up past the top shelf reaches the Sound toggle; the choice is remembered.
   m.muted = (m.reg.Read("heroMuted") = "1")
@@ -110,29 +114,30 @@ function NewItem(parent as Object, item as Object) as Object
   n.AddField("itemSeries", "string", false)
   n.AddField("itemSeason", "string", false)
   n.AddField("itemEpisode", "string", false)
+  n.AddField("itemTile", "string", false)
+  n.AddField("itemEpCount", "string", false)
   n.SetFields(item)
   return n
 end function
 
-' Shelves: rented movies, then each series season, then Animation, then Live Action.
+' Shelves: Rented (movies and one tile per rented show), Animation, Live Action.
+' A show is one tile that opens its seasons and episodes, so a binge never crowds out other rentals.
 sub LoadCatalog(items)
   print "LoadCatalog: " + StrI(items.Count()) + " items"
   rented = []
   animation = []
   live = []
-  seasons = {}
-  seasonKeys = []
+  m.shows = {}
+  showNames = []
   for each item in items
     if item.itemSeries <> invalid and item.itemSeries <> ""
-      ' Zero-padded so the keys sort as season order
-      pad = "00" + item.itemSeason
-      key = item.itemSeries + " | " + Right(pad, 2)
-      if seasons[key] = invalid
-        seasons[key] = []
-        seasonKeys.Push(key)
+      if m.shows[item.itemSeries] = invalid
+        m.shows[item.itemSeries] = []
+        showNames.Push(item.itemSeries)
       end if
       item.episodeNum = Val(item.itemEpisode)
-      seasons[key].Push(item)
+      item.seasonNum = Val(item.itemSeason)
+      m.shows[item.itemSeries].Push(item)
     else if item.itemRental = "1"
       rented.Push(item)
     else if item.itemAnim = "1"
@@ -142,16 +147,34 @@ sub LoadCatalog(items)
     end if
   end for
 
+  showNames.Sort()
+  for each name in showNames
+    eps = m.shows[name]
+    eps.SortBy("episodeNum")
+    eps.SortBy("seasonNum")
+    tile = {}
+    tile.Append(eps[0])
+    tile.title = name
+    tile.itemTitle = name
+    tile.itemTile = "1"
+    tile.itemEpCount = StrI(eps.Count()).Trim()
+    tile.itemRuntime = ""
+    tile.itemYear = ""
+    anyRental = false
+    for each ep in eps
+      if ep.itemRental = "1" then anyRental = true
+    end for
+    if anyRental
+      rented.Push(tile)
+    else if tile.itemAnim = "1"
+      animation.Push(tile)
+    else
+      live.Push(tile)
+    end if
+  end for
+
   root = CreateObject("roSGNode", "ContentNode")
   if rented.Count() > 0 then AddShelf(root, "Rented", rented)
-  seasonKeys.Sort()
-  for each key in seasonKeys
-    group = seasons[key]
-    group.SortBy("episodeNum")
-    label = group[0].itemSeries + "  -  Season " + group[0].itemSeason
-    if group[0].itemRental = "1" then label = "Rented  -  " + label
-    AddShelf(root, label, group)
-  end for
   if animation.Count() > 0 then AddShelf(root, "Animation", animation)
   if live.Count() > 0 then AddShelf(root, "Live Action", live)
 
@@ -162,6 +185,42 @@ sub LoadCatalog(items)
   m.rows.opacity = 0
   m.rowsTick.control = "start"
   if root.GetChildCount() > 0 then FocusHero(root.GetChild(0).GetChild(0))
+end sub
+
+' Open a show: its seasons as shelves, episodes in order. Back returns to the shelf it came from.
+sub OpenSeries(name as String)
+  eps = m.shows[name]
+  if eps = invalid then return
+  m.mainContent = m.rows.content
+  m.mainFocus = m.rows.rowItemFocused
+  m.inSeries = name
+  root = CreateObject("roSGNode", "ContentNode")
+  season = -1
+  shelf = invalid
+  for each ep in eps
+    if ep.seasonNum <> season
+      season = ep.seasonNum
+      shelf = root.CreateChild("ContentNode")
+      shelf.title = name + "  -  Season " + StrI(season).Trim()
+    end if
+    NewItem(shelf, ep)
+  end for
+  m.shownId = ""
+  m.rows.content = root
+  m.rows.SetFocus(true)
+  if root.GetChildCount() > 0 then FocusHero(root.GetChild(0).GetChild(0))
+end sub
+
+sub CloseSeries()
+  m.inSeries = ""
+  m.shownId = ""
+  m.rows.content = m.mainContent
+  if m.mainFocus <> invalid then m.rows.jumpToRowItem = m.mainFocus
+  m.rows.SetFocus(true)
+  if m.mainFocus <> invalid
+    shelf = m.mainContent.GetChild(m.mainFocus[0])
+    if shelf <> invalid then FocusHero(shelf.GetChild(m.mainFocus[1]))
+  end if
 end sub
 
 sub AddShelf(root as Object, name as String, items as Object)
@@ -190,6 +249,13 @@ sub FocusHero(it as Object)
   if it.itemRuntime <> ""
     mins = Val(it.itemRuntime)
     parts.Push(StrI(Int(mins / 60)).Trim() + "h " + StrI(mins mod 60).Trim() + "m")
+  end if
+  if it.itemTile = "1"
+    if it.itemEpCount = "1"
+      parts.Push("1 episode")
+    else
+      parts.Push(it.itemEpCount + " episodes")
+    end if
   end if
   if it.itemAnim = "1"
     parts.Push("Animation")
@@ -386,6 +452,10 @@ sub OnSelect()
   it = shelf.GetChild(at[1])
   if it = invalid or it.itemId = invalid then return
   print "Selected: " + it.itemId
+  if it.itemTile = "1"
+    OpenSeries(it.itemSeries)
+    return
+  end if
   StartPlayback(it)
 end sub
 
@@ -546,6 +616,10 @@ function OnKeyEvent(k, p) as Boolean
         FocusMute(false)
         return true
       end if
+      return true
+    end if
+    if k = "back" and m.inSeries <> ""
+      CloseSeries()
       return true
     end if
     if k = "up" and m.rows.hasFocus()
