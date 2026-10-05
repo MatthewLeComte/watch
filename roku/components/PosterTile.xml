@@ -1,13 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- One poster in a shelf, with slightly rounded corners. -->
+<!-- One poster in a shelf: slightly rounded corners, and a thin outline when it has focus. -->
 <component name="PosterTile" extends="Group">
   <interface>
     <field id="itemContent" type="node" onChange="OnContent" />
+    <field id="focusPercent" type="float" onChange="OnFocus" />
+    <field id="rowHasFocus" type="boolean" onChange="OnFocus" />
+    <field id="rowListHasFocus" type="boolean" onChange="OnFocus" />
   </interface>
   <script type="text/brightscript" uri="pkg:/components/PosterTile.brs" />
   <children>
     <MaskGroup id="mask" maskUri="pkg:/images/poster-mask.png" maskSize="[236, 354]">
       <Poster id="img" width="236" height="354" loadDisplayMode="scaleToZoom" />
     </MaskGroup>
+    <Poster id="ring" width="236" height="354" uri="pkg:/images/poster-focus.png" opacity="0" />
   </children>
 </component>

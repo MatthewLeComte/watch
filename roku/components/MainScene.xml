@@ -98,12 +98,13 @@
       />
     <RowList
       id="rows"
-      translation="[80, 594]"
+      translation="[80, 608]"
       itemSize="[1800, 490]"
       rowItemSize="[[236, 354]]"
-      rowItemSpacing="[[26, 0]]"
+      rowItemSpacing="[[24, 0]]"
+      drawFocusFeedback="false"
       itemComponentName="PosterTile"
-      rowLabelOffset="[[0, 23]]"
+      rowLabelOffset="[[0, 16]]"
       rowLabelFont="font:MediumBoldSystemFont"
       showRowLabel="[true]"
       numRows="2"
