@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- One poster in a shelf, with slightly rounded corners. -->
+<component name="PosterTile" extends="Group">
+  <interface>
+    <field id="itemContent" type="node" onChange="OnContent" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/PosterTile.brs" />
+  <children>
+    <MaskGroup id="mask" maskUri="pkg:/images/poster-mask.png" maskSize="[210, 315]">
+      <Poster id="img" width="210" height="315" loadDisplayMode="scaleToZoom" />
+    </MaskGroup>
+  </children>
+</component>

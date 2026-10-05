@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component name="MainScene" extends="Scene">
   <children>
-    <Rectangle id="bg" width="1920" height="1080" color="0x0C0C0EFF" />
+    <Rectangle id="bg" width="1920" height="1080" color="0x060608FF" />
     <Poster
       id="ambient"
       translation="[640, 0]"
       width="1280"
-      height="620"
+      height="720"
       loadWidth="48"
       loadHeight="27"
       loadDisplayMode="scaleToZoom"
@@ -14,9 +14,9 @@
       />
     <Video
       id="hero"
-      translation="[560, -95]"
-      width="1440"
-      height="810"
+      translation="[640, 0]"
+      width="1280"
+      height="720"
       enableUI="false"
       mute="true"
       loop="true"
@@ -27,20 +27,20 @@
       id="backdrop"
       translation="[640, 0]"
       width="1280"
-      height="620"
+      height="720"
       loadDisplayMode="scaleToZoom"
       opacity="0"
       />
-    <Rectangle id="curtain" translation="[640, 0]" width="1280" height="620" color="0x0C0C0EFF" />
+    <Rectangle id="curtain" translation="[640, 0]" width="1280" height="720" color="0x060608FF" />
     <Poster
       id="scrim"
       translation="[640, 0]"
       width="1280"
-      height="620"
+      height="720"
       uri="pkg:/images/scrim-left.png"
       />
-    <Rectangle id="coverLeft" width="640" height="760" color="0x0C0C0EFF" />
-    <Rectangle id="coverBottom" translation="[640, 620]" width="1280" height="160" color="0x0C0C0EFF" />
+    <Rectangle id="coverLeft" width="640" height="760" color="0x060608FF" />
+    <Poster id="coverBottom" translation="[640, 480]" width="1280" height="240" uri="pkg:/images/fade-bottom.png" />
     <Rectangle
       id="capBg"
       translation="[730, 505]"
@@ -101,7 +101,8 @@
       translation="[80, 594]"
       itemSize="[1800, 420]"
       rowItemSize="[[210, 315]]"
-      rowItemSpacing="[[16, 0]]"
+      rowItemSpacing="[[26, 0]]"
+      itemComponentName="PosterTile"
       rowLabelOffset="[[0, 23]]"
       rowLabelFont="font:MediumBoldSystemFont"
       showRowLabel="[true]"
@@ -114,7 +115,7 @@
     <Poster id="muteRing" translation="[1808, 34]" width="80" height="80" uri="pkg:/images/ring.png" visible="false" />
     <Poster id="muteIcon" translation="[1816, 42]" width="64" height="64" uri="pkg:/images/sound-on.png" />
     <Group id="loading" visible="false">
-      <Rectangle width="1920" height="1080" color="0x0C0C0EFF" />
+      <Rectangle width="1920" height="1080" color="0x060608FF" />
       <Label
         id="loadTitle"
         translation="[160, 440]"
