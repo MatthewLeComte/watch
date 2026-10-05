@@ -15,6 +15,8 @@ const PART = 8 * 1024 * 1024;
 
 type MovieRow = {
   /** From the saved-stream job, present for titles saved from an online source. */
+  resume_s?: number | null;
+  last_played_at?: string | null;
   job_media_type?: string | null;
   job_season?: number | null;
   job_episode?: number | null;
@@ -285,6 +287,8 @@ async function libraryRoutes(request: Request, env: Env, path: string): Promise<
   if (!rest && request.method === "PATCH") return patchItem(request, env, id);
   if (!rest && request.method === "DELETE") return deleteItem(env, id);
   if (rest === "keep" && request.method === "POST") return keepItem(env, id);
+  if (rest === "progress" && request.method === "PUT") return putProgress(request, env, id);
+  if (rest === "progress" && request.method === "DELETE") return startOver(env, id);
   if (rest === "enrich" && request.method === "POST") return enrichSaved(env, id);
   if (rest === "complete" && request.method === "POST") return completeItem(env, id);
   if (rest === "replace" && request.method === "POST") return startReplace(request, env, id);
@@ -967,6 +971,32 @@ export async function deleteItem(env: Env, id: string): Promise<Response> {
   return json({ ok: true });
 }
 
+/** Report where playback is. Under 30s or past the credits means there is nothing to resume. */
+async function putProgress(request: Request, env: Env, id: string): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as { position?: number; duration?: number };
+  const position = Number(body.position);
+  const duration = Number(body.duration) || 0;
+  if (!Number.isFinite(position) || position < 0) return json({ error: "bad_position" }, 400);
+  const finished = duration > 0 && (position >= duration * 0.95 || duration - position < 120);
+  const resume = position >= 30 && !finished ? Math.round(position) : null;
+  const done = await env.watch
+    .prepare("UPDATE movie SET resume_s = ?, last_played_at = ? WHERE id = ? AND status = 'ready'")
+    .bind(resume, new Date().toISOString(), id)
+    .run();
+  if (!(done.meta?.changes ?? 0)) return json({ error: "not_found" }, 404);
+  return json({ ok: true, resumeSeconds: resume });
+}
+
+/** Start over: forget the resume point but keep the title as most recently opened. */
+async function startOver(env: Env, id: string): Promise<Response> {
+  const done = await env.watch
+    .prepare("UPDATE movie SET resume_s = NULL, last_played_at = ? WHERE id = ? AND status = 'ready'")
+    .bind(new Date().toISOString(), id)
+    .run();
+  if (!(done.meta?.changes ?? 0)) return json({ error: "not_found" }, 404);
+  return json({ ok: true, resumeSeconds: null });
+}
+
 /** Fill in metadata for a saved title (and its rental date if it never got one) from its TMDB id. */
 async function enrichSaved(env: Env, id: string): Promise<Response> {
   const job = await env.watch
@@ -1497,6 +1527,9 @@ function toItem(row: MovieRow, subs: SubRow[]) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     expiresAt: row.expires_at ?? null,
+    // Resume Watching: where playback stopped, and when the title was last opened.
+    resumeSeconds: row.resume_s ?? null,
+    lastPlayedAt: row.last_played_at ?? null,
     // Episodes saved from an online source: the app groups them by series, then season.
     mediaType: row.job_media_type ?? null,
     series: row.job_media_type === "tv" ? row.original_title : null,
