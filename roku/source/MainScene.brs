@@ -69,7 +69,7 @@ sub Init()
   m.startAt = 0
   m.lastSaved = 0
   m.progTask = invalid
-  m.resumeDlg = invalid
+  m.startOverHint = m.top.findNode("startOver")
   m.mainContent = invalid
   m.mainFocus = invalid
   m.shows = {}
@@ -491,11 +491,8 @@ sub OnSelect()
     OpenSeries(it.itemSeries)
     return
   end if
-  if Val(it.itemResume) > 30
-    ShowResumeChoice(it)
-    return
-  end if
-  StartPlayback(it, 0)
+  ' A title with a resume point simply resumes; Up in the player starts it over
+  StartPlayback(it, Val(it.itemResume))
 end sub
 
 sub StyleTrickPlay()
@@ -504,52 +501,16 @@ sub StyleTrickPlay()
   bar.filledBarImageUri = "pkg:/images/filled-bar.png"
 end sub
 
-sub ShowResumeChoice(it as Object)
-  m.top.findNode("resumeTitle").text = it.itemTitle
-  m.top.findNode("resumeText").text = "You stopped at " + ClockText(Val(it.itemResume)) + "."
-  m.resumeItem = it
-  m.resumePick = 0
-  PaintResume()
-  m.top.findNode("resume").visible = true
-  m.current = "resume"
-  m.top.setFocus(true)
-end sub
-
-' Highlight the chosen button: white bar with dark text, the other plain white text
-sub PaintResume()
-  hi = m.top.findNode("resumeHi")
-  b0 = m.top.findNode("resumeBtn0")
-  b1 = m.top.findNode("resumeBtn1")
-  if m.resumePick = 0
-    hi.translation = [620, 540]
-    b0.color = "0x000000FF"
-    b1.color = "0xFFFFFFFF"
-  else
-    hi.translation = [620, 614]
-    b0.color = "0xFFFFFFFF"
-    b1.color = "0x000000FF"
-  end if
-end sub
-
-sub CloseResume()
-  m.top.findNode("resume").visible = false
-  m.current = "home"
-  m.rows.SetFocus(true)
-end sub
-
-sub OnResumeChoice(idx as Integer)
-  it = m.resumeItem
-  m.top.findNode("resume").visible = false
-  m.current = "home"
+' Up in the player: forget the resume point and begin again from the start
+sub StartOver()
+  it = m.playItem
   if it = invalid then return
-  if idx = 0
-    StartPlayback(it, Val(it.itemResume))
-  else
-    ' Start over forgets the point on the server too
-    SendProgress(it.itemId, "DELETE", "")
-    SetLocalResume(it.itemId, "")
-    StartPlayback(it, 0)
-  end if
+  SendProgress(it.itemId, "DELETE", "")
+  SetLocalResume(it.itemId, "")
+  m.startOverHint.visible = false
+  m.startAt = 0
+  m.lastSaved = 0
+  m.player.seek = 0
 end sub
 
 function ClockText(secs as Integer) as String
@@ -590,6 +551,8 @@ sub SaveProgress(finishedHint as Boolean)
   here = m.player.position
   dur = m.player.duration
   if here = invalid then return
+  ' Never overwrite a resume point when playback never actually began
+  if here <= 0 and m.startAt > 0 then return
   if dur = invalid then dur = 0
   at = Int(here)
   body = "{""position"":" + StrI(at).Trim() + ",""duration"":" + StrI(Int(dur)).Trim() + "}"
@@ -606,10 +569,12 @@ end sub
 sub OnPlayPosition()
   ' While watching, save the point about every 30 seconds
   if m.current <> "player" or m.playItem = invalid then return
+  if m.player.position - m.startAt > 12 then m.startOverHint.visible = false
   if m.player.position - m.lastSaved >= 30 then SaveProgress(false)
 end sub
 
 sub StartPlayback(it as Object, startAt as Integer)
+  print "StartPlayback at " + StrI(startAt).Trim() + " current=" + m.current
   if m.current <> "home" then return
   m.playItem = it
   m.startAt = startAt
@@ -695,6 +660,7 @@ sub OnStartTimer()
     m.player.globalCaptionMode = "On"
   end if
   if m.startAt > 0 then content.PlayStart = m.startAt
+  m.startOverHint.visible = (m.startAt > 0)
   m.player.content = content
   m.player.visible = true
   m.current = "player"
@@ -732,6 +698,7 @@ sub ReturnHome()
   wasPlaying = (m.playItem <> invalid and m.current = "player")
   if wasPlaying then SaveProgress(m.player.state = "finished")
   m.playItem = invalid
+  m.startOverHint.visible = false
   m.player.control = "stop"
   m.player.visible = false
   HideLoading()
@@ -757,15 +724,8 @@ function OnKeyEvent(k, p) as Boolean
     ReturnHome()
     return true
   end if
-  if m.current = "resume"
-    if k = "up" or k = "down"
-      m.resumePick = 1 - m.resumePick
-      PaintResume()
-    else if k = "OK"
-      OnResumeChoice(m.resumePick)
-    else if k = "back"
-      CloseResume()
-    end if
+  if m.current = "player" and k = "up" and m.startAt > 0
+    StartOver()
     return true
   end if
   if m.current = "home"

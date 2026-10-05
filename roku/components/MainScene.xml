@@ -133,15 +133,6 @@
         text="Starting"
         />
     </Group>
-    <Group id="resume" visible="false">
-      <Rectangle width="1920" height="1080" color="0x000000C8" />
-      <Rectangle translation="[560, 340]" width="800" height="400" color="0x1C1C1EFF" />
-      <Label id="resumeTitle" translation="[620, 380]" width="680" font="font:LargeBoldSystemFont" color="0xFFFFFFFF" />
-      <Label id="resumeText" translation="[620, 460]" width="680" font="font:MediumSystemFont" color="0xB8B8B8FF" />
-      <Rectangle id="resumeHi" translation="[620, 540]" width="680" height="64" color="0xFFFFFFFF" />
-      <Label id="resumeBtn0" translation="[644, 552]" width="640" font="font:MediumBoldSystemFont" color="0x000000FF" text="Resume" />
-      <Label id="resumeBtn1" translation="[644, 626]" width="640" font="font:MediumBoldSystemFont" color="0xFFFFFFFF" text="Start Over" />
-    </Group>
     <Video
       id="player"
       width="1920"
@@ -150,6 +141,11 @@
       enableTrickPlay="true"
       visible="false"
       />
+    <Group id="startOver" visible="false" translation="[760, 900]">
+      <Rectangle width="400" height="64" color="0x000000B8" />
+      <Label translation="[0, 14]" width="400" horizAlign="center" font="font:MediumBoldSystemFont" color="0xFFFFFFFF" text="Up: Start Over" />
+    </Group>
+
     <Rectangle
       id="keyCatcher"
       width="10"
