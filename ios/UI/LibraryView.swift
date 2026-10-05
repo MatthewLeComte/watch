@@ -119,6 +119,7 @@ struct LibraryView: View {
                 if !searchPresented {
                     ToolbarSpacer(.flexible, placement: .bottomBar)
                     ToolbarItem(placement: .bottomBar) {
+            .navigationDestination(for: SeriesRoute.self) { SeriesView(name: $0.name) }
                         ImportMenuButton { importing = true }
                     }
                 }
@@ -145,23 +146,19 @@ struct LibraryView: View {
         .navigationSplitViewStyle(.balanced)
     }
 
-        let rented = library.movies.filter { $0.isRental && $0.series == nil }
+        // A show is one tile that opens its seasons and episodes, so a binge never crowds out other rentals.
+        let showTiles = Dictionary(grouping: library.movies.filter { $0.series != nil }) { $0.series ?? "" }
+            .compactMap { _, eps -> Movie? in eps.min { ($0.season ?? 0, $0.episode ?? 0) < ($1.season ?? 0, $1.episode ?? 0) } }
+            .sorted { ($0.series ?? "") < ($1.series ?? "") }
+        let rentedShows = showTiles.filter { tile in library.movies.contains { $0.series == tile.series && $0.isRental } }
+        let keptShows = showTiles.filter { tile in !rentedShows.contains { $0.series == tile.series } }
+        let rented = library.movies.filter { $0.isRental && $0.series == nil } + rentedShows
         if !rented.isEmpty {
-            let soonest = rented.compactMap(\.rentalDaysLeft).min() ?? 0
-            r.append(Shelf(id: "rented", title: "Rented · next one deletes in \(soonest)d", movies: rented))
+            let soonest = library.movies.filter(\.isRental).compactMap(\.rentalDaysLeft).min() ?? 0
+            r.append(Shelf(id: "rented", title: "Rented · next one deletes in \(soonest)d", movies: rented, tiles: Set(rentedShows.map(\.id))))
         }
-        // Episodes group by show, then season, in episode order.
-        let episodes = library.movies.filter { $0.series != nil }
-        let seasons = Dictionary(grouping: episodes) { "\($0.series ?? "")\u{1}\(String(format: "%03d", $0.season ?? 1))" }
-        for key in seasons.keys.sorted() {
-            guard let group = seasons[key], let first = group.first else { continue }
-            let list = group.sorted { ($0.episode ?? 0) < ($1.episode ?? 0) }
-            r.append(Shelf(id: "season-\(key)", title: "\(first.series ?? "") · Season \(first.season ?? 1)", movies: list))
-        }
-        let rented = library.movies.filter(\.isRental)
-        if !rented.isEmpty {
-            let soonest = rented.compactMap(\.rentalDaysLeft).min() ?? 0
-            r.append(Shelf(id: "rented", title: "Rented · next one deletes in \(soonest)d", movies: rented))
+        if !keptShows.isEmpty {
+            r.append(Shelf(id: "shows", title: "Series", movies: keptShows, tiles: Set(keptShows.map(\.id))))
         }
     private var shelves: [Shelf] {
         var r: [Shelf] = []
@@ -433,6 +430,26 @@ struct LibraryView: View {
         }
         .frame(maxWidth: width, maxHeight: .infinity, alignment: .bottom)
                                     .overlay(alignment: .bottomLeading) {
+                                        if s.tiles.contains(m.id) {
+                                            let eps = library.movies.filter { $0.series == m.series }
+                                            Text(eps.count == 1 ? "1 episode" : "\(eps.count) episodes")
+                                                .font(.caption2.weight(.bold))
+                                                .padding(.horizontal, 7)
+                                                .padding(.vertical, 4)
+                                                .background(.black.opacity(0.7), in: Capsule())
+                                                .foregroundStyle(.white)
+                                                .padding(6)
+                                        } else if let days = m.rentalDaysLeft {
+                                            Text(days == 0 ? "Leaves today" : "Leaves in \(days)d")
+                                                .font(.caption2.weight(.bold))
+                                                .padding(.horizontal, 7)
+                                                .padding(.vertical, 4)
+                                                .background(.black.opacity(0.7), in: Capsule())
+                                                .foregroundStyle(.white)
+                                                .padding(6)
+                                        }
+                                    }
+                                    .overlay(alignment: .bottomLeading) {
                                         if let days = m.rentalDaysLeft {
                                             Text(days == 0 ? "Leaves today" : "Leaves in \(days)d")
                                                 .font(.caption2.weight(.bold))
@@ -461,7 +478,7 @@ struct LibraryView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 12) {
                     ForEach(s.movies) { m in
-                        NavigationLink(value: m) {
+                        NavigationLink(value: s.tiles.contains(m.id) ? AnyHashable(SeriesRoute(name: m.series ?? "")) : AnyHashable(m)) {
                             VStack(alignment: .leading, spacing: 6) {
                                 PosterImage(url: posters[m.id] ?? URL(string: m.thumbnailUrl ?? ""), title: m.displayTitle)
                                     .frame(width: card, height: card * 1.5)
@@ -700,7 +717,7 @@ private struct TrailerCue {
     }
 }
 
-private struct Shelf: Identifiable { let id: String; let title: String; let movies: [Movie] }
+private struct Shelf: Identifiable { let id: String; let title: String; let movies: [Movie]; var tiles: Set<String> = [] }
 /// Muted looping trailer file from R2. The poster stays visible until the first frame.
 private struct HeroTrailer: View {
     var url: URL

@@ -91,3 +91,65 @@ func clock(_ seconds: Double) -> String {
     let s = Int(seconds)
     return String(format: "%d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60)
 }
+
+/// Where a show tile leads: its seasons, then its episodes.
+struct SeriesRoute: Hashable { var name: String }
+
+struct SeriesView: View {
+    @Environment(LibraryModel.self) private var library
+    let name: String
+
+    private var episodes: [Movie] { library.movies.filter { $0.series == name } }
+    private var seasons: [Int] { Array(Set(episodes.map { $0.season ?? 1 })).sorted() }
+
+    var body: some View {
+        List {
+            ForEach(seasons, id: \.self) { season in
+                Section {
+                    ForEach(episodes.filter { ($0.season ?? 1) == season }.sorted { ($0.episode ?? 0) < ($1.episode ?? 0) }) { episode in
+                        NavigationLink(value: episode) { EpisodeRow(show: name, episode: episode) }
+                            .listRowBackground(Color.black)
+                    }
+                } header: {
+                    Text("Season \(season)")
+                        .font(.headline.smallCaps())
+                        .foregroundStyle(.white)
+                }
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Color.black)
+        .navigationTitle(name)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct EpisodeRow: View {
+    let show: String
+    let episode: Movie
+
+    /// "Rick and Morty S1 E1: Pilot" reads as "Pilot" under its own show and season.
+    private var episodeName: String {
+        episode.title.range(of: ": ").map { String(episode.title[$0.upperBound...]) } ?? episode.displayTitle
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            PosterImage(url: URL(string: episode.posterUrl ?? episode.thumbnailUrl ?? ""), title: episode.displayTitle)
+                .frame(width: 64, height: 96)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("E\(episode.episode ?? 0) · \(episodeName)")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                Text([episode.runtimeText ?? "", episode.rentalDaysLeft.map { $0 == 0 ? "Leaves today" : "Leaves in \($0)d" } ?? ""]
+                    .filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.65))
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
