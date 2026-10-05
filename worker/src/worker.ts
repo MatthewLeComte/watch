@@ -307,6 +307,7 @@ async function libraryRoutes(request: Request, env: Env, path: string): Promise<
   const sub = rest.match(/^subtitles\/([a-z]{2,3})$/);
   if (sub && request.method === "GET") return subtitle(env, id, sub[1]!);
   if (sub && request.method === "PUT") return putSubtitle(request, env, id, sub[1]!);
+  if (sub && request.method === "DELETE") return deleteSubtitle(env, id, sub[1]!);
   return json({ error: "not_found" }, 404);
 }
 
@@ -1527,9 +1528,22 @@ async function subtitle(env: Env, id: string, lang: string): Promise<Response> {
   if (!row) return json({ error: "no_subtitle" }, 404);
   const obj = await env.watch_bucket.get(row.r2_key);
   if (!obj) return json({ error: "no_subtitle" }, 404);
+  // A track can be corrected or replaced at the same address, so players must not keep an old copy.
   return new Response(obj.body, {
-    headers: { "content-type": "text/vtt; charset=utf-8", "cache-control": "private, max-age=86400" },
+    headers: { "content-type": "text/vtt; charset=utf-8", "cache-control": "private, no-store" },
   });
+}
+
+/** Remove a subtitle track: a wrong track is worse than none. */
+async function deleteSubtitle(env: Env, id: string, lang: string): Promise<Response> {
+  const row = await env.watch
+    .prepare("SELECT r2_key FROM subtitle WHERE movie_id = ? AND lang = ?")
+    .bind(id, lang)
+    .first<{ r2_key: string }>();
+  if (!row) return json({ error: "no_subtitle" }, 404);
+  await env.watch_bucket.delete(row.r2_key);
+  await env.watch.prepare("DELETE FROM subtitle WHERE movie_id = ? AND lang = ?").bind(id, lang).run();
+  return json(await loadItem(env, id));
 }
 
 async function putSubtitle(request: Request, env: Env, id: string, lang: string): Promise<Response> {
