@@ -41,6 +41,31 @@ sub Init()
   m.startTimer.ObserveField("fire", "OnStartTimer")
   m.fadeTick.ObserveField("fire", "OnFadeTick")
   m.loadTick.ObserveField("fire", "OnLoadTick")
+  m.rowTick = m.top.findNode("rowTick")
+  m.rowTick.ObserveField("fire", "OnRowTick")
+  m.backdrop.ObserveField("loadStatus", "OnBackdropLoad")
+  m.clock = CreateObject("roTimespan")
+  m.tileGroup = []
+  m.tileImg = []
+  m.tileTrack = []
+  m.tileFill = []
+  m.tileKey = []
+  m.tilePart = []
+  for n = 0 to 6
+    key = "t" + StrI(n).Trim()
+    m.tileGroup.Push(m.top.findNode(key))
+    m.tileImg.Push(m.top.findNode(key + "i"))
+    m.tileTrack.Push(m.top.findNode(key + "t"))
+    m.tileFill.Push(m.top.findNode(key + "f"))
+    m.tileKey.Push("")
+    m.tilePart.Push(0.0)
+  end for
+  m.fpos = 0.0
+  m.ffrom = 0.0
+  m.fto = 0.0
+  m.moving = false
+  m.slide = 0.0
+  m.ringTarget = 0.0
   m.menuTick.ObserveField("fire", "OnMenuTick")
   m.menuHide.ObserveField("fire", "CloseMenu")
   m.hero.ObserveField("state", "OnHeroState")
@@ -64,7 +89,7 @@ sub Init()
   m.heroId = ""
   m.cues = []
   m.capTask = invalid
-  m.backdropTarget = 1.0
+  m.backdropTarget = 0.0
   m.playTries = 0
   m.pending = invalid
   m.dots = 0
@@ -217,14 +242,6 @@ function Progress(it as Object) as Float
   return part
 end function
 
-sub Bar(track as Object, fill as Object, it as Dynamic, width as Integer)
-  part = 0.0
-  if it <> invalid then part = Progress(it)
-  track.visible = (part > 0)
-  fill.visible = (part > 0)
-  if part > 0 then fill.width = Int(width * part)
-end sub
-
 function MetaText(it as Object) as String
   parts = []
   if S(it.itemYear) <> "" then parts.Push(it.itemYear)
@@ -262,7 +279,7 @@ function MetaText(it as Object) as String
   return out
 end function
 
-' Draw the whole home screen from the current zone, tab, row and column.
+' Draw the whole home screen from the current zone, tab, row and column (no movement).
 sub Render()
   RenderBar()
   if m.tab = "search"
@@ -286,55 +303,175 @@ sub Render()
   row = rows[m.row]
   at = m.cols[m.row]
   m.rowTitle.text = row.title
-  m.ring.visible = (m.zone = "rows")
-  for i = 0 to 3
-    n = StrI(i).Trim()
-    node = m.top.findNode("fp" + n)
-    it = invalid
-    if at + 1 + i < row.items.Count() then it = row.items[at + 1 + i]
-    node.visible = (it <> invalid)
-    if it <> invalid then node.uri = PosterOf(it)
-    Bar(m.top.findNode("ft" + n), m.top.findNode("ff" + n), it, 285)
-  end for
-  below = invalid
-  if m.row + 1 < rows.Count() then below = rows[m.row + 1]
-  if below <> invalid
-    m.nextTitle.text = below.title
+  if m.row + 1 < rows.Count()
+    m.nextTitle.text = rows[m.row + 1].title
   else
     m.nextTitle.text = ""
   end if
-  for i = 0 to 6
-    node = m.top.findNode("np" + StrI(i).Trim())
-    it = invalid
-    if below <> invalid and m.cols[m.row + 1] + i < below.items.Count() then it = below.items[m.cols[m.row + 1] + i]
-    node.visible = (it <> invalid)
-    if it <> invalid then node.uri = PosterOf(it)
-  end for
-  ShowItem(row.items[at])
+  m.moving = false
+  m.fpos = at
+  LayoutRow(m.fpos)
+  it = row.items[at]
+  ShowDetails(it)
+  if it.itemId + S(it.itemTile) <> m.shownKey
+    HideArt()
+    ShowArt(it)
+  end if
+  m.ringTarget = 0.0
+  if m.zone = "rows" then m.ringTarget = 1.0
+  m.rowTick.control = "start"
 end sub
 
-' The wide tile and the details under it. Its trailer starts once focus has rested on it.
-sub ShowItem(it as Object)
+' Where a tile sits in its row when `focus` is the focused one: [left edge, width]. The focused title is
+' the wide tile at the left; earlier titles have slid off to the left, later ones follow as posters.
+function RectFor(idx as Integer, focus as Integer) as Object
+  if idx < focus then return [(idx - focus) * 324, 307]
+  if idx = focus then return [0, 893]
+  return [910 + (idx - focus - 1) * 324, 307]
+end function
+
+' Place the row's tiles for a focus position that may be part-way between two titles, so moving along
+' a row slides every poster and grows the next one into the wide tile.
+sub LayoutRow(f as Float)
+  row = m.rowsData[m.row]
+  count = row.items.Count()
+  k = Int(f)
+  t = f - k
+  used = [false, false, false, false, false, false, false]
+  for idx = k - 1 to k + 5
+    if idx >= 0 and idx < count
+      a = RectFor(idx, k)
+      b = RectFor(idx, k + 1)
+      x = a[0] + (b[0] - a[0]) * t
+      w = a[1] + (b[1] - a[1]) * t
+      n = idx mod 7
+      used[n] = true
+      it = row.items[idx]
+      key = it.itemId + S(it.itemTile)
+      if m.tileKey[n] <> key
+        m.tileKey[n] = key
+        m.tileImg[n].uri = PosterOf(it)
+        m.tilePart[n] = Progress(it)
+        m.tileTrack[n].visible = (m.tilePart[n] > 0)
+        m.tileFill[n].visible = (m.tilePart[n] > 0)
+      end if
+      PlaceTile(n, x, w)
+    end if
+  end for
+  for n = 0 to 6
+    m.tileGroup[n].visible = used[n]
+  end for
+end sub
+
+' A tile is a window of the given width onto its poster. Wider than the poster, the poster grows to
+' fill it and the window shows its middle.
+sub PlaceTile(n as Integer, x as Float, w as Float)
+  group = m.tileGroup[n]
+  group.translation = [x, 0]
+  group.clippingRect = [0, 0, w, 498]
+  wide = w
+  if wide < 332 then wide = 332
+  img = m.tileImg[n]
+  img.width = wide
+  img.height = wide * 1.5
+  img.translation = [(w - wide) / 2, (498 - wide * 1.5) / 2]
+  key = "t" + StrI(n).Trim()
+  m.top.findNode(key + "c1").translation = [w - 12, 0]
+  m.top.findNode(key + "c3").translation = [w - 12, 486]
+  m.tileTrack[n].width = w
+  m.tileFill[n].width = w * m.tilePart[n]
+end sub
+
+sub ShowDetails(it as Object)
   m.focused = it
-  Bar(m.top.findNode("wt"), m.top.findNode("wf"), it, 760)
-  key = it.itemId + S(it.itemTile)
-  if key = m.shownKey then return
-  m.shownKey = key
   m.titleLabel.text = S(it.itemTitle)
   m.metaLabel.text = MetaText(it)
   m.overviewLabel.text = S(it.itemOverview)
+end sub
+
+' Take the still and the trailer off the wide tile, leaving the poster underneath.
+sub HideArt()
   StopHero()
-  m.backdrop.uri = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/backdrop"
-  m.backdrop.opacity = 1
-  m.backdropTarget = 1.0
+  m.shownKey = ""
   m.fadeTick.control = "stop"
+  m.backdrop.opacity = 0
+  m.backdropTarget = 0.0
+end sub
+
+' Focus has settled: the title's wide still dissolves in over its poster, then its trailer takes over.
+sub ShowArt(it as Object)
+  m.shownKey = it.itemId + S(it.itemTile)
+  url = "https://watch.cornerstonecoatings.com/v1/items/" + it.itemId + "/backdrop"
+  if m.backdrop.uri = url and m.backdrop.loadStatus = "ready"
+    m.backdropTarget = 1.0
+    m.fadeTick.control = "start"
+  else
+    m.backdrop.uri = url
+  end if
   m.heroTimer.control = "stop"
   m.heroTimer.control = "start"
 end sub
 
+sub OnBackdropLoad()
+  if m.backdrop.loadStatus = "ready" and m.shownKey <> "" and not m.moving and m.heroId = ""
+    m.backdropTarget = 1.0
+    m.fadeTick.control = "start"
+  end if
+end sub
+
+' Move along the row: details change at once, the tiles slide and the next poster grows over 0.26 s.
+sub MoveTo(col as Integer)
+  m.cols[m.row] = col
+  ShowDetails(m.rowsData[m.row].items[col])
+  HideArt()
+  m.ring.opacity = 0
+  m.ringTarget = 0.0
+  m.ffrom = m.fpos
+  m.fto = col
+  m.clock.Mark()
+  m.moving = true
+  m.rowTick.control = "start"
+end sub
+
+' One timer drives every movement: tiles along a row, the page sliding between rows, the focus outline.
+sub OnRowTick()
+  busy = false
+  if m.moving
+    p = m.clock.TotalMilliseconds() / 260.0
+    if p > 1 then p = 1
+    ease = 1 - (1 - p) * (1 - p) * (1 - p)
+    m.fpos = m.ffrom + (m.fto - m.ffrom) * ease
+    LayoutRow(m.fpos)
+    if p >= 1
+      m.moving = false
+      m.fpos = m.fto
+      if m.zone = "rows" then m.ringTarget = 1.0
+      if m.focused <> invalid then ShowArt(m.focused)
+    end if
+    busy = true
+  end if
+  if m.slide <> 0
+    m.slide = m.slide * 0.74
+    if Abs(m.slide) < 1 then m.slide = 0
+    m.rowsUI.translation = [0, m.slide]
+    m.rowsUI.opacity = 1 - Abs(m.slide) / 160
+    busy = true
+  end if
+  o = m.ring.opacity
+  if o < m.ringTarget
+    o = o + 0.2
+    if o > m.ringTarget then o = m.ringTarget
+    busy = true
+  else if o > m.ringTarget
+    o = m.ringTarget
+  end if
+  m.ring.opacity = o
+  if not busy then m.rowTick.control = "stop"
+end sub
+
 sub OnHeroTimer()
   it = m.focused
-  if m.current <> "home" or m.tab = "search" or it = invalid then return
+  if m.current <> "home" or m.tab = "search" or it = invalid or m.moving then return
   if S(it.itemTrailer) = "1" then StartHero(it)
 end sub
 
@@ -383,7 +520,7 @@ end sub
 sub OnFadeTick()
   b = m.backdrop.opacity
   if b < m.backdropTarget
-    b = b + 0.1
+    b = b + 0.07
     if b > m.backdropTarget then b = m.backdropTarget
   else if b > m.backdropTarget
     b = b - 0.06
@@ -724,14 +861,19 @@ function HomeKey(k as String) as Boolean
     SelectItem(row.items[at])
     return true
   else if k = "right"
-    if at + 1 < row.items.Count() then m.cols[m.row] = at + 1
+    if at + 1 < row.items.Count() then MoveTo(at + 1)
+    return true
   else if k = "left"
-    if at > 0 then m.cols[m.row] = at - 1
+    if at > 0 then MoveTo(at - 1)
+    return true
   else if k = "down"
-    if m.row + 1 < m.rowsData.Count() then m.row = m.row + 1
+    if m.row + 1 >= m.rowsData.Count() then return true
+    m.row = m.row + 1
+    m.slide = 150.0
   else if k = "up"
     if m.row > 0
       m.row = m.row - 1
+      m.slide = -150.0
     else if m.inSeries = ""
       m.zone = "bar"
       names = ["", "search", "home", "shows", "movies"]
@@ -816,7 +958,10 @@ sub ReturnHome()
   m.keyCatcher.visible = true
   m.keyCatcher.SetFocus(true)
   m.current = "home"
-  m.shownKey = ""
+  HideArt()
+  for n = 0 to 6
+    m.tileKey[n] = ""
+  end for
   ' What was just watched moves to the front of Continue Watching
   if wasPlaying and m.inSeries = "" and m.tab <> "search" then BuildRows()
   Render()
