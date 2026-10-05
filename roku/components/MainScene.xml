@@ -2,145 +2,124 @@
 <component name="MainScene" extends="Scene">
   <children>
     <Rectangle id="bg" width="1920" height="1080" color="0x0C0C0EFF" />
-    <Poster
-      id="ambient"
-      translation="[640, 0]"
-      width="1280"
-      height="620"
-      loadWidth="48"
-      loadHeight="27"
-      loadDisplayMode="scaleToZoom"
-      opacity="0.6"
-      />
-    <Video
-      id="hero"
-      translation="[560, -95]"
-      width="1440"
-      height="810"
-      enableUI="false"
-      mute="true"
-      loop="true"
-      notificationInterval="0.2"
-      visible="false"
-      />
-    <Poster
-      id="backdrop"
-      translation="[640, 0]"
-      width="1280"
-      height="620"
-      loadDisplayMode="scaleToZoom"
-      opacity="0"
-      />
-    <Rectangle id="curtain" translation="[640, 0]" width="1280" height="620" color="0x0C0C0EFF" />
-    <Poster
-      id="scrim"
-      translation="[640, 0]"
-      width="1280"
-      height="620"
-      uri="pkg:/images/scrim-left.png"
-      />
-    <Rectangle id="coverLeft" width="640" height="760" color="0x0C0C0EFF" />
-    <Rectangle id="coverBottom" translation="[640, 620]" width="1280" height="160" color="0x0C0C0EFF" />
-    <Rectangle
-      id="capBg"
-      translation="[730, 505]"
-      width="1100"
-      height="84"
-      color="0x00000099"
-      visible="false"
-      />
-    <Label
-      id="caption"
-      translation="[740, 509]"
-      width="1080"
-      height="76"
-      wrap="true"
-      maxLines="2"
-      horizAlign="center"
-      vertAlign="center"
-      font="font:MediumSystemFont"
-      color="0xFFFFFFFF"
-      />
-    <Label
-      id="brand"
-      translation="[80, 56]"
-      font="font:LargeBoldSystemFont"
-      color="0xE50914FF"
-      text="MatFlix"
-      />
-    <Label
-      id="title"
-      translation="[80, 130]"
-      width="600"
-      height="150"
-      wrap="true"
-      maxLines="2"
-      vertAlign="bottom"
-      font="font:LargeBoldSystemFont"
-      color="0xFFFFFFFF"
-      />
-    <Label
-      id="meta"
-      translation="[80, 292]"
-      width="600"
-      font="font:MediumBoldSystemFont"
-      color="0xD2D2D2FF"
-      />
-    <Label
-      id="overview"
-      translation="[80, 342]"
-      width="560"
-      height="190"
-      wrap="true"
-      maxLines="4"
-      font="font:SmallSystemFont"
-      color="0xB8B8B8FF"
-      />
-    <RowList
-      id="rows"
-      translation="[80, 594]"
-      itemSize="[1800, 420]"
-      rowItemSize="[[210, 315]]"
-      rowItemSpacing="[[16, 0]]"
-      rowLabelOffset="[[0, 23]]"
-      rowLabelFont="font:MediumBoldSystemFont"
-      showRowLabel="[true]"
-      numRows="2"
-      focusXOffset="[0]"
-      rowFocusAnimationStyle="floatingFocus"
-      focusable="true"
-      opacity="0"
-      />
-    <Poster id="muteRing" translation="[1808, 34]" width="80" height="80" uri="pkg:/images/ring.png" visible="false" />
-    <Poster id="muteIcon" translation="[1816, 42]" width="64" height="64" uri="pkg:/images/sound-on.png" />
+    <Group id="homeUI">
+      <Group id="rowsUI">
+        <Label id="rowTitle" translation="[96, 138]" font="font:MediumBoldSystemFont" color="0xFFFFFFFF" />
+        <Rectangle id="ring" translation="[90, 194]" width="772" height="440" color="0xFFFFFFFF" />
+        <Rectangle translation="[96, 200]" width="760" height="428" color="0x0C0C0EFF" />
+        <Video
+          id="hero"
+          translation="[96, 200]"
+          width="760"
+          height="428"
+          enableUI="false"
+          mute="true"
+          loop="true"
+          notificationInterval="0.2"
+          visible="false"
+          />
+        <Poster id="backdrop" translation="[96, 200]" width="760" height="428" loadDisplayMode="scaleToZoom" />
+        <Rectangle id="capBg" translation="[96, 548]" width="760" height="72" color="0x000000A0" visible="false" />
+        <Label
+          id="caption"
+          translation="[112, 550]"
+          width="728"
+          height="68"
+          wrap="true"
+          maxLines="2"
+          horizAlign="center"
+          vertAlign="center"
+          font="font:SmallSystemFont"
+          color="0xFFFFFFFF"
+          />
+        <Rectangle id="wt" translation="[96, 620]" width="760" height="8" color="0x5A5A5AFF" visible="false" />
+        <Rectangle id="wf" translation="[96, 620]" width="10" height="8" color="0xE50914FF" visible="false" />
+        <Poster id="fp0" translation="[872, 200]" width="285" height="428" loadDisplayMode="scaleToZoom" />
+        <Rectangle id="ft0" translation="[872, 620]" width="285" height="8" color="0x5A5A5AFF" visible="false" />
+        <Rectangle id="ff0" translation="[872, 620]" width="10" height="8" color="0xE50914FF" visible="false" />
+        <Poster id="fp1" translation="[1173, 200]" width="285" height="428" loadDisplayMode="scaleToZoom" />
+        <Rectangle id="ft1" translation="[1173, 620]" width="285" height="8" color="0x5A5A5AFF" visible="false" />
+        <Rectangle id="ff1" translation="[1173, 620]" width="10" height="8" color="0xE50914FF" visible="false" />
+        <Poster id="fp2" translation="[1474, 200]" width="285" height="428" loadDisplayMode="scaleToZoom" />
+        <Rectangle id="ft2" translation="[1474, 620]" width="285" height="8" color="0x5A5A5AFF" visible="false" />
+        <Rectangle id="ff2" translation="[1474, 620]" width="10" height="8" color="0xE50914FF" visible="false" />
+        <Poster id="fp3" translation="[1775, 200]" width="285" height="428" loadDisplayMode="scaleToZoom" />
+        <Rectangle id="ft3" translation="[1775, 620]" width="285" height="8" color="0x5A5A5AFF" visible="false" />
+        <Rectangle id="ff3" translation="[1775, 620]" width="10" height="8" color="0xE50914FF" visible="false" />
+        <Label id="title" translation="[96, 652]" width="1500" font="font:MediumBoldSystemFont" color="0xFFFFFFFF" />
+        <Label id="meta" translation="[96, 702]" width="1500" font="font:SmallBoldSystemFont" color="0xD2D2D2FF" />
+        <Label
+          id="overview"
+          translation="[96, 744]"
+          width="1100"
+          height="96"
+          wrap="true"
+          maxLines="2"
+          font="font:SmallSystemFont"
+          color="0xB8B8B8FF"
+          />
+        <Label id="nextTitle" translation="[96, 838]" font="font:MediumBoldSystemFont" color="0x8C8C8CFF" />
+        <Poster id="np0" translation="[96, 892]" width="285" height="428" loadDisplayMode="scaleToZoom" opacity="0.55" />
+        <Poster id="np1" translation="[397, 892]" width="285" height="428" loadDisplayMode="scaleToZoom" opacity="0.55" />
+        <Poster id="np2" translation="[698, 892]" width="285" height="428" loadDisplayMode="scaleToZoom" opacity="0.55" />
+        <Poster id="np3" translation="[999, 892]" width="285" height="428" loadDisplayMode="scaleToZoom" opacity="0.55" />
+        <Poster id="np4" translation="[1300, 892]" width="285" height="428" loadDisplayMode="scaleToZoom" opacity="0.55" />
+        <Poster id="np5" translation="[1601, 892]" width="285" height="428" loadDisplayMode="scaleToZoom" opacity="0.55" />
+        <Poster id="np6" translation="[1902, 892]" width="285" height="428" loadDisplayMode="scaleToZoom" opacity="0.55" />
+      </Group>
+      <Group id="searchUI" visible="false">
+        <Label id="query" translation="[96, 150]" width="460" font="font:LargeBoldSystemFont" color="0xFFFFFFFF" text="Search" />
+        <Rectangle translation="[96, 222]" width="440" height="3" color="0x5A5A5AFF" />
+        <Rectangle id="keyHi" translation="[96, 250]" width="68" height="60" color="0xFFFFFFFF" visible="false" />
+        <Group id="keys" />
+        <Rectangle id="resHi" translation="[594, 144]" width="252" height="372" color="0xFFFFFFFF" visible="false" />
+        <Group id="results" />
+        <Label id="resTitle" translation="[600, 930]" width="1240" font="font:MediumBoldSystemFont" color="0xFFFFFFFF" />
+        <Label id="resMeta" translation="[600, 980]" width="1240" font="font:SmallBoldSystemFont" color="0xD2D2D2FF" />
+      </Group>
+      <Label id="empty" translation="[96, 300]" width="1728" horizAlign="center" font="font:MediumSystemFont" color="0x8C8C8CFF" visible="false" />
+      <Poster id="muteRing" translation="[86, 40]" width="64" height="64" uri="pkg:/images/ring.png" visible="false" />
+      <Poster id="muteIcon" translation="[96, 50]" width="44" height="44" uri="pkg:/images/sound-on.png" />
+      <Group id="bar1" translation="[674, 44]">
+        <Group id="bar1Pill">
+          <Poster id="bar1L" width="28" height="56" uri="pkg:/images/cap-left.png" />
+          <Rectangle id="bar1M" translation="[28, 0]" width="0" height="56" color="0xFFFFFFFF" />
+          <Poster id="bar1R" translation="[28, 0]" width="28" height="56" uri="pkg:/images/cap-right.png" />
+        </Group>
+        <Poster id="bar1Icon" translation="[12, 12]" width="32" height="32" uri="pkg:/images/icon-search.png" />
+      </Group>
+      <Group id="bar2" translation="[742, 44]">
+        <Group id="bar2Pill">
+          <Poster id="bar2L" width="28" height="56" uri="pkg:/images/cap-left.png" />
+          <Rectangle id="bar2M" translation="[28, 0]" width="94" height="56" color="0xFFFFFFFF" />
+          <Poster id="bar2R" translation="[122, 0]" width="28" height="56" uri="pkg:/images/cap-right.png" />
+        </Group>
+        <Label id="bar2Label" width="150" height="56" horizAlign="center" vertAlign="center" font="font:SmallBoldSystemFont" color="0xFFFFFFFF" text="Home" />
+      </Group>
+      <Group id="bar3" translation="[904, 44]">
+        <Group id="bar3Pill">
+          <Poster id="bar3L" width="28" height="56" uri="pkg:/images/cap-left.png" />
+          <Rectangle id="bar3M" translation="[28, 0]" width="104" height="56" color="0xFFFFFFFF" />
+          <Poster id="bar3R" translation="[132, 0]" width="28" height="56" uri="pkg:/images/cap-right.png" />
+        </Group>
+        <Label id="bar3Label" width="160" height="56" horizAlign="center" vertAlign="center" font="font:SmallBoldSystemFont" color="0xFFFFFFFF" text="Shows" />
+      </Group>
+      <Group id="bar4" translation="[1076, 44]">
+        <Group id="bar4Pill">
+          <Poster id="bar4L" width="28" height="56" uri="pkg:/images/cap-left.png" />
+          <Rectangle id="bar4M" translation="[28, 0]" width="114" height="56" color="0xFFFFFFFF" />
+          <Poster id="bar4R" translation="[142, 0]" width="28" height="56" uri="pkg:/images/cap-right.png" />
+        </Group>
+        <Label id="bar4Label" width="170" height="56" horizAlign="center" vertAlign="center" font="font:SmallBoldSystemFont" color="0xFFFFFFFF" text="Movies" />
+      </Group>
+      <Label id="brand" translation="[1524, 50]" width="300" horizAlign="right" font="font:MediumBoldSystemFont" color="0xE50914FF" text="MatFlix" />
+    </Group>
     <Group id="loading" visible="false">
       <Rectangle width="1920" height="1080" color="0x0C0C0EFF" />
-      <Label
-        id="loadTitle"
-        translation="[160, 440]"
-        width="1600"
-        horizAlign="center"
-        font="font:LargeBoldSystemFont"
-        color="0xFFFFFFFF"
-        />
-      <Label
-        id="loadText"
-        translation="[160, 520]"
-        width="1600"
-        horizAlign="center"
-        font="font:MediumSystemFont"
-        color="0xB8B8B8FF"
-        text="Starting"
-        />
+      <Label id="loadTitle" translation="[160, 440]" width="1600" horizAlign="center" font="font:LargeBoldSystemFont" color="0xFFFFFFFF" />
+      <Label id="loadText" translation="[160, 520]" width="1600" horizAlign="center" font="font:MediumSystemFont" color="0xB8B8B8FF" text="Starting" />
     </Group>
-    <Video
-      id="player"
-      width="1920"
-      height="1080"
-      notificationInterval="10"
-      enableTrickPlay="true"
-      visible="false"
-      />
+    <Video id="player" width="1920" height="1080" notificationInterval="10" enableTrickPlay="true" visible="false" />
     <Group id="menu" visible="false" opacity="0">
       <Poster id="menuShade" translation="[0, 640]" width="1920" height="440" uri="pkg:/images/shade-bottom.png" />
       <Group id="btn0" translation="[96, 836]">
@@ -178,19 +157,10 @@
           />
       </Group>
     </Group>
-
-    <Rectangle
-      id="keyCatcher"
-      width="10"
-      height="10"
-      opacity="0.01"
-      focusable="true"
-      visible="false"
-      />
-    <Timer id="heroTimer" duration="0.35" repeat="false" />
+    <Rectangle id="keyCatcher" width="10" height="10" opacity="0.01" focusable="true" />
+    <Timer id="heroTimer" duration="0.9" repeat="false" />
     <Timer id="startTimer" duration="0.4" repeat="false" />
     <Timer id="fadeTick" duration="0.03" repeat="true" />
-    <Timer id="rowsTick" duration="0.04" repeat="true" />
     <Timer id="loadTick" duration="0.5" repeat="true" />
     <Timer id="menuTick" duration="0.03" repeat="true" />
     <Timer id="menuHide" duration="6" repeat="false" />
