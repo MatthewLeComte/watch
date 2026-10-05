@@ -29,12 +29,12 @@ spec.loader.exec_module(prep)
 
 def fetch(url, headers):
     """GET with retries: the connection occasionally drops mid-body."""
-    for attempt in range(5):
+    for attempt in range(10):
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as res:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=120) as res:
                 return res.read()
         except (OSError, http.client.HTTPException):
-            time.sleep(2 * (attempt + 1))
+            time.sleep(min(30, 3 * (attempt + 1)))
     raise RuntimeError(f"could not read {url}")
 
 

@@ -613,8 +613,17 @@ async function startReplace(request: Request, env: Env, id: string): Promise<Res
     .first<{ ext: string }>();
   if (!movie) return json({ error: "not_found" }, 404);
   if (!(await env.watch_bucket.head(`video/${id}`))) return json({ error: "no_file_to_replace" }, 409);
-  const busy = await env.watch.prepare("SELECT 1 AS ok FROM upload WHERE movie_id = ?").bind(id).first();
-  if (busy) return json({ error: "upload_in_progress" }, 409);
+  // A replace left half done (the uploader was stopped or lost its connection) must not block the next
+  // attempt: drop the stale multipart upload and start again. The stored file is untouched until a
+  // replace completes.
+  const stale = await env.watch
+    .prepare("SELECT upload_id FROM upload WHERE movie_id = ?")
+    .bind(id)
+    .first<{ upload_id: string }>();
+  if (stale) {
+    await env.watch_bucket.resumeMultipartUpload(`video/${id}`, stale.upload_id).abort().catch(() => {});
+    await env.watch.prepare("DELETE FROM upload WHERE movie_id = ?").bind(id).run();
+  }
   const upload = await env.watch_bucket.createMultipartUpload(`video/${id}`, {
     httpMetadata: { contentType: contentTypeFor(movie.ext) },
   });

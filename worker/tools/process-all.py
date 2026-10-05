@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Fix every library title from its local original, one at a time, without depending on the drive staying up.
+"""Fix every library title one at a time: download it from the library, process it locally, upload, delete.
 
-For each title: copy the original onto this Mac's internal disk, work only from that copy, then delete it
-and move on. If the drive disappears (before or during a copy) the run waits for it to come back and
-retries instead of failing.
+No drive needed. The library already holds every original, so each title is downloaded from there onto this
+Mac's internal disk (resuming if the connection drops), worked on, uploaded back, and the local copy deleted
+before the next one starts.
 
 Per title, only what is missing is done:
   - re-mux to a standard MP4 (moov first, one mdat) and replace the stored file, so Roku starts it fast;
   - build the seek-preview (BIF) and upload it.
-A title that is already fixed is skipped without being copied at all.
+A title that is already fixed is skipped without being downloaded at all.
 
-Usage: WATCH_KEY=... process-all.py "<movies folder>" [--limit N]
+Usage: WATCH_KEY=... process-all.py [--limit N]
 """
+import http.client
 import importlib.util
 import json
 import os
@@ -19,6 +20,8 @@ import shutil
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -35,53 +38,50 @@ rmx = load("remux_all", "remux-all.py")
 bifs = load("bif_all", "bif-all.py")
 
 MIN_FREE_GB = 25
+CHUNK = 8 * 1024 * 1024
 
 
-def wait_for(path):
-    """Block until the path is readable again (the drive was unplugged or went to sleep)."""
-    waited = 0
-    while not os.path.exists(path):
-        if waited % 60 == 0:
-            print(f"waiting for {path} to come back ({waited // 60} min)", flush=True)
-        time.sleep(15)
-        waited += 15
-
-
-def stage(src, dst):
-    """Copy a file from the drive to local disk, riding out the drive dropping away."""
-    for attempt in range(8):
-        try:
-            wait_for(src)
-            shutil.copyfile(src, dst)
-            if os.path.getsize(dst) == os.path.getsize(src):
-                return
-        except OSError as e:
-            print(f"  copy interrupted ({e}); retrying", flush=True)
-        if os.path.exists(dst):
-            os.remove(dst)
-        time.sleep(10)
-    raise RuntimeError("could not copy from the drive")
+def download(item, dst, key):
+    """Fetch the stored file to dst, resuming from where it stopped if the connection drops."""
+    url = f"{prep.BASE}/v1/items/{item['id']}/media"
+    want = item["byteSize"]
+    have = 0
+    stalls = 0
+    with open(dst, "wb") as out:
+        while have < want:
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}", "Range": f"bytes={have}-"})
+            try:
+                with urllib.request.urlopen(req, timeout=120) as res:
+                    while True:
+                        block = res.read(CHUNK)
+                        if not block:
+                            break
+                        out.write(block)
+                        have += len(block)
+                        stalls = 0
+            except (OSError, http.client.HTTPException, urllib.error.HTTPError):
+                stalls += 1
+                if stalls > 10:
+                    raise RuntimeError(f"download kept failing at {have / 1e6:.0f} MB of {want / 1e6:.0f} MB")
+                time.sleep(min(30, 3 * stalls))
+    if have != want:
+        raise RuntimeError(f"downloaded {have} bytes, expected {want}")
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    if not args:
-        raise SystemExit(__doc__)
     key = os.environ.get("WATCH_KEY", "")
     if not key:
         raise SystemExit("WATCH_KEY is not set")
     limit = int(sys.argv[sys.argv.index("--limit") + 1]) if "--limit" in sys.argv else 0
-    root = args[0]
-    wait_for(root)
-    files = rmx.local_files(root)
 
     items = json.loads(rmx.fetch(prep.BASE + "/v1/items", {"Authorization": f"Bearer {key}"}))["items"]
-    todo = [(files[i["filename"].lower()], i) for i in items if i["filename"].lower() in files and not i.get("hlsUrl")]
-    print(f"{len(todo)} titles with a local original", flush=True)
+    # Saved streams are HLS chunks with no single file; everything else has one.
+    todo = [i for i in items if not i.get("hlsUrl")]
+    print(f"{len(todo)} titles in the library", flush=True)
 
     fixed = skipped = failed = 0
     start = time.time()
-    for n, (src, item) in enumerate(todo, 1):
+    for n, item in enumerate(todo, 1):
         if limit and fixed >= limit:
             break
         try:
@@ -95,12 +95,13 @@ def main():
             t0 = time.time()
             with tempfile.TemporaryDirectory() as work:
                 local = os.path.join(work, "source.mp4")
-                stage(src, local)
+                download(item, local, key)
                 did = []
                 preview_from = local
                 if not standard:
                     out = os.path.join(work, "movie.mp4")
                     prep.remux(local, out)
+                    os.remove(local)  # free the space before the upload
                     prep.upload_video(out, item["id"], key)
                     preview_from = out
                     did.append("remuxed")
