@@ -6,8 +6,8 @@
   </interface>
   <script type="text/brightscript" uri="pkg:/components/PosterTile.brs" />
   <children>
-    <MaskGroup id="mask" maskUri="pkg:/images/poster-mask.png" maskSize="[210, 315]">
-      <Poster id="img" width="210" height="315" loadDisplayMode="scaleToZoom" />
+    <MaskGroup id="mask" maskUri="pkg:/images/poster-mask.png" maskSize="[236, 354]">
+      <Poster id="img" width="236" height="354" loadDisplayMode="scaleToZoom" />
     </MaskGroup>
   </children>
 </component>

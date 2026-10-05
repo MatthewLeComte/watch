@@ -99,8 +99,8 @@
     <RowList
       id="rows"
       translation="[80, 594]"
-      itemSize="[1800, 420]"
-      rowItemSize="[[210, 315]]"
+      itemSize="[1800, 490]"
+      rowItemSize="[[236, 354]]"
       rowItemSpacing="[[26, 0]]"
       itemComponentName="PosterTile"
       rowLabelOffset="[[0, 23]]"
