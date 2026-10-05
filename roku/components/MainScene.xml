@@ -141,9 +141,42 @@
       enableTrickPlay="true"
       visible="false"
       />
-    <Group id="startOver" visible="false" translation="[760, 900]">
-      <Rectangle width="400" height="64" color="0x000000B8" />
-      <Label translation="[0, 14]" width="400" horizAlign="center" font="font:MediumBoldSystemFont" color="0xFFFFFFFF" text="Up: Start Over" />
+    <Group id="menu" visible="false" opacity="0">
+      <Poster id="menuShade" translation="[0, 640]" width="1920" height="440" uri="pkg:/images/shade-bottom.png" />
+      <Group id="btn0" translation="[96, 836]">
+        <Group id="btn0Pill">
+          <Poster width="36" height="72" uri="pkg:/images/cap-left.png" />
+          <Rectangle id="btn0Mid" translation="[36, 0]" width="230" height="72" color="0xFFFFFFFF" />
+          <Poster id="btn0CapR" translation="[266, 0]" width="36" height="72" uri="pkg:/images/cap-right.png" />
+        </Group>
+        <Poster id="btn0Icon" translation="[26, 16]" width="40" height="40" uri="pkg:/images/icon-restart.png" />
+        <Label
+          id="btn0Label"
+          translation="[80, 0]"
+          height="72"
+          vertAlign="center"
+          font="font:MediumBoldSystemFont"
+          color="0xFFFFFFFF"
+          text="Start Over"
+          />
+      </Group>
+      <Group id="btn1" translation="[416, 836]">
+        <Group id="btn1Pill">
+          <Poster width="36" height="72" uri="pkg:/images/cap-left.png" />
+          <Rectangle id="btn1Mid" translation="[36, 0]" width="230" height="72" color="0xFFFFFFFF" />
+          <Poster id="btn1CapR" translation="[266, 0]" width="36" height="72" uri="pkg:/images/cap-right.png" />
+        </Group>
+        <Poster id="btn1Icon" translation="[26, 16]" width="40" height="40" uri="pkg:/images/icon-subs.png" />
+        <Label
+          id="btn1Label"
+          translation="[80, 0]"
+          height="72"
+          vertAlign="center"
+          font="font:MediumBoldSystemFont"
+          color="0xFFFFFFFF"
+          text="Subtitles Off"
+          />
+      </Group>
     </Group>
 
     <Rectangle
@@ -159,6 +192,8 @@
     <Timer id="fadeTick" duration="0.03" repeat="true" />
     <Timer id="rowsTick" duration="0.04" repeat="true" />
     <Timer id="loadTick" duration="0.5" repeat="true" />
+    <Timer id="menuTick" duration="0.03" repeat="true" />
+    <Timer id="menuHide" duration="6" repeat="false" />
   </children>
   <script type="text/brightscript" uri="pkg:/source/MainScene.brs" />
 </component>

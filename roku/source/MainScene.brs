@@ -46,10 +46,17 @@ sub Init()
   m.fadeTick.ObserveField("fire", "OnFadeTick")
   m.rowsTick.ObserveField("fire", "OnRowsTick")
   m.loadTick.ObserveField("fire", "OnLoadTick")
+  m.menu = m.top.findNode("menu")
+  m.btn1 = m.top.findNode("btn1")
+  m.menuTick = m.top.findNode("menuTick")
+  m.menuHide = m.top.findNode("menuHide")
+  m.menuTick.ObserveField("fire", "OnMenuTick")
+  m.menuHide.ObserveField("fire", "CloseMenu")
   m.hero.ObserveField("state", "OnHeroState")
   m.hero.ObserveField("position", "OnHeroPosition")
   m.backdrop.ObserveField("loadStatus", "OnBackdropLoad")
   StyleTrickPlay()
+  ShrinkPreviews()
 
   m.current = "home"
   m.playTries = 0
@@ -69,13 +76,20 @@ sub Init()
   m.startAt = 0
   m.lastSaved = 0
   m.progTask = invalid
-  m.startOverHint = m.top.findNode("startOver")
+  m.menuOpen = false
+  m.menuSel = 0
+  m.menuTarget = 0.0
+  m.playSubs = false
+  m.subTrack = ""
+  m.subsApplied = false
   m.mainContent = invalid
   m.mainFocus = invalid
   m.shows = {}
   m.reg = CreateObject("roRegistrySection", "WatchCache")
   ' Trailers play with sound. Up past the top shelf reaches the Sound toggle; the choice is remembered.
   m.muted = (m.reg.Read("heroMuted") = "1")
+  ' Subtitles stay as the viewer last left them (off until switched on in the player)
+  m.subsOn = (m.reg.Read("subsOn") = "1")
   ShowMuteIcon()
 
   json = ReadChunks(m.reg, "catalog")
@@ -491,7 +505,7 @@ sub OnSelect()
     OpenSeries(it.itemSeries)
     return
   end if
-  ' A title with a resume point simply resumes; Up in the player starts it over
+  ' A title with a resume point simply resumes; Start Over is in the player's controls
   StartPlayback(it, Val(it.itemResume))
 end sub
 
@@ -501,16 +515,192 @@ sub StyleTrickPlay()
   bar.filledBarImageUri = "pkg:/images/filled-bar.png"
 end sub
 
-' Up in the player: forget the resume point and begin again from the start
+' Seek previews: the stock strip is five large frames across the whole screen. Shrink it toward the
+' progress bar it sits on, so the film stays visible while scrubbing.
+sub ShrinkPreviews()
+  strip = m.player.bifDisplay
+  if strip = invalid then return
+  if strip.translation = invalid then return
+  m.strip = strip
+  was = strip.scale
+  m.stripWas = [1.0, 1.0]
+  if was <> invalid and was.Count() = 2 then m.stripWas = [was[0], was[1]]
+  m.stripBy = 0.6
+  strip.scale = [m.stripWas[0] * m.stripBy, m.stripWas[1] * m.stripBy]
+  AnchorPreviews()
+  strip.ObserveField("translation", "AnchorPreviews")
+end sub
+
+' Keep the shrunken strip centred and resting on the bar (bottom centre of the stock strip: 960, 928),
+' wherever the player moves it.
+sub AnchorPreviews()
+  if m.strip = invalid then return
+  at = m.strip.translation
+  if at = invalid then return
+  k = m.stripBy
+  cx = 0.0
+  cy = 0.0
+  dx = 1.0 - k * m.stripWas[0]
+  dy = 1.0 - k * m.stripWas[1]
+  if dx <> 0 then cx = (1.0 - k) * (960 - at[0]) / dx
+  if dy <> 0 then cy = (1.0 - k) * (928 - at[1]) / dy
+  m.strip.scaleRotateCenter = [cx, cy]
+end sub
+
+' Forget the resume point and begin again from the start
 sub StartOver()
   it = m.playItem
   if it = invalid then return
   SendProgress(it.itemId, "DELETE", "")
   SetLocalResume(it.itemId, "")
-  m.startOverHint.visible = false
   m.startAt = 0
   m.lastSaved = 0
   m.player.seek = 0
+end sub
+
+' Player controls: Up or Down during the film shows Start Over and, when the title has them, Subtitles.
+' Left and right move, OK chooses, anything else puts them away. They leave on their own after a few seconds.
+sub OpenMenu()
+  m.menuOpen = true
+  m.menuSel = 0
+  m.btn1.visible = m.playSubs
+  m.menu.visible = true
+  PaintMenu()
+  m.menuTarget = 1.0
+  m.menuTick.control = "start"
+  m.menuHide.control = "stop"
+  m.menuHide.control = "start"
+  m.keyCatcher.visible = true
+  m.keyCatcher.SetFocus(true)
+end sub
+
+sub CloseMenu()
+  if not m.menuOpen then return
+  m.menuOpen = false
+  m.menuHide.control = "stop"
+  m.menuTarget = 0.0
+  m.menuTick.control = "start"
+  m.keyCatcher.visible = false
+  if m.current = "player" then m.player.SetFocus(true)
+end sub
+
+sub OnMenuTick()
+  ' The words are measured once they have been drawn, so size the pills again while fading in
+  if m.menuTarget > 0 then PaintMenu()
+  o = m.menu.opacity
+  if o < m.menuTarget
+    o = o + 0.2
+    if o > m.menuTarget then o = m.menuTarget
+  else if o > m.menuTarget
+    o = o - 0.25
+    if o < m.menuTarget then o = m.menuTarget
+  end if
+  m.menu.opacity = o
+  if o = m.menuTarget
+    m.menuTick.control = "stop"
+    if o <= 0 then m.menu.visible = false
+  end if
+end sub
+
+sub PaintMenu()
+  if m.subsOn
+    m.top.findNode("btn1Label").text = "Subtitles On"
+  else
+    m.top.findNode("btn1Label").text = "Subtitles Off"
+  end if
+  x = 96
+  for i = 0 to 1
+    key = "btn" + StrI(i).Trim()
+    label = m.top.findNode(key + "Label")
+    icon = m.top.findNode(key + "Icon")
+    pill = m.top.findNode(key + "Pill")
+    ' The focused button is a white pill with dark words; the other is a faint pill with white words
+    if i = m.menuSel
+      pill.opacity = 1.0
+      icon.blendColor = "0x101012FF"
+      label.color = "0x101012FF"
+    else
+      pill.opacity = 0.18
+      icon.blendColor = "0xFFFFFFFF"
+      label.color = "0xFFFFFFFF"
+    end if
+    ' Each pill is as wide as its words
+    w = label.boundingRect().width
+    if w < 40
+      w = 232
+      if i = 0 then w = 180
+    end if
+    total = 80 + w + 30
+    m.top.findNode(key + "Mid").width = total - 72
+    m.top.findNode(key + "CapR").translation = [total - 36, 0]
+    m.top.findNode(key).translation = [x, 836]
+    x = x + total + 18
+  end for
+end sub
+
+function MenuKey(k as String) as Boolean
+  m.menuHide.control = "stop"
+  m.menuHide.control = "start"
+  count = 1
+  if m.playSubs then count = 2
+  if k = "right"
+    if m.menuSel < count - 1 then m.menuSel = m.menuSel + 1
+    PaintMenu()
+  else if k = "left"
+    if m.menuSel > 0 then m.menuSel = m.menuSel - 1
+    PaintMenu()
+  else if k = "OK"
+    if m.menuSel = 0
+      CloseMenu()
+      StartOver()
+    else
+      ToggleSubtitles()
+      PaintMenu()
+    end if
+  else if k = "play"
+    CloseMenu()
+    if m.player.state = "paused"
+      m.player.control = "resume"
+    else
+      m.player.control = "pause"
+    end if
+  else
+    CloseMenu()
+  end if
+  return true
+end function
+
+' Subtitles follow the viewer's last choice. Off only hides them in this player.
+sub ApplySubtitles()
+  if not m.playSubs
+    m.player.suppressCaptions = false
+    return
+  end if
+  if m.subsOn
+    m.player.suppressCaptions = false
+    m.player.globalCaptionMode = "On"
+    tracks = m.player.availableSubtitleTracks
+    if tracks <> invalid and tracks.Count() > 0
+      m.player.subtitleTrack = tracks[0].TrackName
+    else
+      m.player.subtitleTrack = m.subTrack
+    end if
+  else
+    m.player.suppressCaptions = true
+  end if
+end sub
+
+sub ToggleSubtitles()
+  m.subsOn = not m.subsOn
+  if m.subsOn
+    m.reg.Write("subsOn", "1")
+  else
+    m.reg.Write("subsOn", "0")
+    ' Switching them off here also switches the Roku caption setting off, so nothing can still draw them
+    m.player.globalCaptionMode = "Off"
+  end if
+  m.reg.Flush()
+  ApplySubtitles()
 end sub
 
 function ClockText(secs as Integer) as String
@@ -569,7 +759,6 @@ end sub
 sub OnPlayPosition()
   ' While watching, save the point about every 30 seconds
   if m.current <> "player" or m.playItem = invalid then return
-  if m.player.position - m.startAt > 12 then m.startOverHint.visible = false
   if m.player.position - m.lastSaved >= 30 then SaveProgress(false)
 end sub
 
@@ -654,17 +843,26 @@ sub OnStartTimer()
   content.SDBifUrl = bif
   content.HDBifUrl = bif
   content.FHDBifUrl = bif
+  m.playSubs = false
+  m.subTrack = ""
+  m.subsApplied = false
   if it.itemSubs = "1"
-    subUrl = base + "/v1/items/" + it.itemId + "/subtitles/en?key=" + apiKey
-    content.SubtitleTracks = [{ Language: "eng", TrackName: subUrl, Description: "English" }]
-    m.player.globalCaptionMode = "On"
+    m.subTrack = base + "/v1/items/" + it.itemId + "/subtitles/en?key=" + apiKey
+    content.SubtitleTracks = [{ Language: "eng", TrackName: m.subTrack, Description: "English" }]
+    m.playSubs = true
+  end if
+  ' Earlier builds switched the Roku caption setting on for every title; put it back once
+  if m.reg.Read("capsReset") <> "1"
+    if not m.subsOn then m.player.globalCaptionMode = "Off"
+    m.reg.Write("capsReset", "1")
+    m.reg.Flush()
   end if
   if m.startAt > 0 then content.PlayStart = m.startAt
-  m.startOverHint.visible = (m.startAt > 0)
   m.player.content = content
   m.player.visible = true
   m.current = "player"
   m.player.control = "play"
+  ApplySubtitles()
   ' The player itself takes focus so left/right/OK open its native seek bar, with BIF previews
   m.player.SetFocus(true)
 end sub
@@ -673,7 +871,12 @@ sub OnPlayerState()
   print "Player state: " + m.player.state
   if m.player.state = "playing" and m.current = "player"
     HideLoading()
-    m.player.SetFocus(true)
+    if not m.menuOpen then m.player.SetFocus(true)
+    ' The subtitle tracks are known once the film is playing, so settle the choice then
+    if not m.subsApplied
+      m.subsApplied = true
+      ApplySubtitles()
+    end if
   end if
   if m.player.state = "finished"
     print "Player finished"
@@ -698,7 +901,12 @@ sub ReturnHome()
   wasPlaying = (m.playItem <> invalid and m.current = "player")
   if wasPlaying then SaveProgress(m.player.state = "finished")
   m.playItem = invalid
-  m.startOverHint.visible = false
+  m.menuOpen = false
+  m.menuHide.control = "stop"
+  m.menuTick.control = "stop"
+  m.menuTarget = 0.0
+  m.menu.opacity = 0
+  m.menu.visible = false
   m.player.control = "stop"
   m.player.visible = false
   HideLoading()
@@ -719,14 +927,18 @@ end sub
 
 function OnKeyEvent(k, p) as Boolean
   if not p then return false
+  if m.current = "player" and m.menuOpen then return MenuKey(k)
   if k = "back" and (m.current = "player" or m.current = "starting")
     m.startTimer.control = "stop"
     ReturnHome()
     return true
   end if
-  if m.current = "player" and k = "up" and m.startAt > 0
-    StartOver()
-    return true
+  if m.current = "player" and (k = "down" or k = "up")
+    state = m.player.state
+    if state = "playing" or state = "paused"
+      OpenMenu()
+      return true
+    end if
   end if
   if m.current = "home"
     ' Up from the top shelf reaches the Sound toggle; down comes back
