@@ -14,6 +14,9 @@ export interface Env {
   WATCH_TMDB_API_KEY?: string | StoreSecret;
   /** TMDB read access token (v4 auth, Bearer). Account secret store binding, or a plain string in dev. */
   WATCH_TMDB_API_READ_ACCESS_TOKEN?: string | StoreSecret;
+  /** Stream page URLs with ${id}, ${season}, ${episode} (see sources/embeds.ts). Set in the dashboard; unset means the default. */
+  WATCH_EMBED_MOVIE?: string;
+  WATCH_EMBED_TV?: string;
   OPENSUBTITLES_API_KEY?: string;
   /** Comma-separated Piped API base URLs for trailer resolution. Empty = built-in defaults. */
   TRAILER_RESOLVER?: string;

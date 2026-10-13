@@ -5,7 +5,7 @@ import { contentTypeFor, edgeCache, extOf, parseByteRange, parseReleaseName, srt
 import { findSplitData, runToEnd, splitAround, type Piece } from "./layout";
 import { handleWatchMcp } from "./mcp";
 import { SOURCES, listSources } from "./sources";
-import { handleRelayPl, handleRelaySeg, handleRelaySave, handleRelaySaveStatus, handleHlsServe, handleSaveBatch, purgeJob, RENTAL_DAYS, type SaveMessage } from "./relay";
+import { handleRelayPl, handleRelaySeg, handleRelaySave, handleRelaySaveStatus, handleHlsServe, handleSaveBatch, purgeJob, RENTAL_DAYS, sweepStalled, type SaveMessage } from "./relay";
 import { TmdbUnconfigured } from "./sources/meta";
 import "./sources/registry";
 import { MIN_VIDEO_BYTES, checkUpload } from "./validate";
@@ -69,14 +69,17 @@ type SubRow = {
 export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(sweepExpired(env));
+    ctx.waitUntil(sweepStalled(env));
   },
   async queue(batch: MessageBatch, env: Env): Promise<void> {
+    // Each message is settled on its own: one lost batch must not send the other four back.
     for (const msg of batch.messages) {
       try {
         await handleSaveBatch(msg.body as SaveMessage, env);
+        msg.ack();
       } catch (err) {
-        console.log(JSON.stringify({ event: "hls_save_batch_error", error: String(err).slice(0, 200) }));
-        throw err;
+        console.log(JSON.stringify({ event: "hls_save_batch_error", attempts: msg.attempts, error: String(err).slice(0, 200) }));
+        msg.retry({ delaySeconds: Math.min(300, 15 * 2 ** Math.max(0, msg.attempts - 1)) });
       }
     }
   },

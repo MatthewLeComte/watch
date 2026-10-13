@@ -15,13 +15,14 @@
   "routes": [
     { "pattern": "watch.cornerstonecoatings.com", "custom_domain": true }
   ],
+  "keep_vars": true,
   "vars": {
     "WATCH_KEY": "a68596aee3429a00eea168ccc408af7f00235119bfce7e07152f92013cecc164"
   },
   "stream": { "binding": "STREAM" },
   "queues": {
     "producers": [{ "binding": "HLS_SAVE_QUEUE", "queue": "hls-save" }],
-    "consumers": [{ "queue": "hls-save", "max_batch_size": 5, "max_retries": 3 }]
+    "consumers": [{ "queue": "hls-save", "max_batch_size": 5, "max_retries": 10 }]
   },
   "secrets_store_secrets": [
     {

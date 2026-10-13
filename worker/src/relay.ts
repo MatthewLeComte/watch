@@ -386,44 +386,48 @@ export async function handleRelaySave(request: Request, env: Env): Promise<Respo
     });
   }
 
-  const BATCH = 20;
-  const height = vHeight;
-  for (let i = 0; i < segs.length; i += BATCH * 5) {
-    const msgs: SaveMessage[] = [];
-    for (let j = i; j < Math.min(i + BATCH * 5, segs.length); j += BATCH) {
-      msgs.push({
-        jobId,
-        height,
-        referer,
-        segs: segs.slice(j, j + BATCH).map((s, k) => ({ i: j + k, u: s.u })),
-      });
-    }
-    await env.HLS_SAVE_QUEUE.sendBatch(msgs.map((m) => ({ body: m })));
-  }
-  for (let i = 0; i < audioSegs.length; i += BATCH * 5) {
-    const msgs: SaveMessage[] = [];
-    for (let j = i; j < Math.min(i + BATCH * 5, audioSegs.length); j += BATCH) {
-      msgs.push({
-        jobId,
-        height,
-        referer,
-        kind: "audio",
-        segs: audioSegs.slice(j, j + BATCH).map((a, k) => ({ i: j + k, u: a.u })),
-      });
-    }
-    await env.HLS_SAVE_QUEUE.sendBatch(msgs.map((m) => ({ body: m })));
-  }
+  await enqueueSegments(env, jobId, vHeight, referer, segs.map((s, i) => ({ i, u: s.u })));
+  await enqueueSegments(env, jobId, vHeight, referer, audioSegs.map((a, i) => ({ i, u: a.u })), "audio");
   return json({ id: jobId, total: segs.length + audioSegs.length, status: "saving" }, 201);
 }
 
-/** GET /v1/relay/save/:jobId — job status. */
+/** Segments per queue message, and messages per send. */
+const BATCH = 20;
+
+/** Puts segments on the save queue in messages of `BATCH`. Used for a new job and for repairing a stalled one. */
+async function enqueueSegments(
+  env: Env,
+  jobId: string,
+  height: number,
+  referer: string | null,
+  segs: { i: number; u: string }[],
+  kind?: "audio",
+): Promise<void> {
+  const queue = env.HLS_SAVE_QUEUE;
+  if (!queue) throw new Error("save_queue_unconfigured");
+  for (let i = 0; i < segs.length; i += BATCH * 5) {
+    const msgs: SaveMessage[] = [];
+    for (let j = i; j < Math.min(i + BATCH * 5, segs.length); j += BATCH) {
+      msgs.push({ jobId, height, referer, ...(kind ? { kind } : {}), segs: segs.slice(j, j + BATCH) });
+    }
+    await queue.sendBatch(msgs.map((m) => ({ body: m })));
+  }
+}
+
+/** A job with no progress for this long is repaired, then failed. */
+const STALLED_MS = 20 * 60 * 1000;
+/** Repairs before a stalled job is given up on. */
+const REPAIRS = 3;
+
+/** GET /v1/relay/save/:jobId — job status. `stalled` is true while a saving job has made no progress for a while. */
 export async function handleRelaySaveStatus(env: Env, jobId: string): Promise<Response> {
   const row = await env.watch
-    .prepare("SELECT id, title, total, done, bytes, status, movie_id, error FROM hls_job WHERE id = ?")
+    .prepare("SELECT id, title, total, done, bytes, status, movie_id, error, updated_at FROM hls_job WHERE id = ?")
     .bind(jobId)
-    .first<{ id: string; title: string; total: number; done: number; bytes: number; status: string; movie_id: string | null; error: string | null }>();
+    .first<{ id: string; title: string; total: number; done: number; bytes: number; status: string; movie_id: string | null; error: string | null; updated_at: string }>();
   if (!row) return json({ error: "not_found" }, 404);
-  return json(row);
+  const quiet = Date.now() - Date.parse(row.updated_at);
+  return json({ ...row, stalled: row.status === "saving" && quiet > STALLED_MS / 2 });
 }
 
 type JobRow = {
@@ -446,42 +450,158 @@ export async function handleSaveBatch(msg: SaveMessage, env: Env): Promise<void>
   if (!job || (job.status !== "saving" && job.status !== "finalizing")) return;
 
   const ref = msg.referer ?? job.referer;
-  let bytes = 0;
-  let ok = 0;
+  const keyOf = (i: number) =>
+    msg.kind === "audio" ? `hls/${msg.jobId}/audio/${audioName(i)}` : `hls/${msg.jobId}/${msg.height}p/${segName(i)}`;
+  const missing: number[] = [];
+  const refused = { count: 0 };
   const PAR = 6;
   for (let i = 0; i < msg.segs.length; i += PAR) {
-    const slice = msg.segs.slice(i, i + PAR);
-    const results = await Promise.all(
-      slice.map(async (s) => {
-        try {
-          const res = await fetch(s.u, { headers: relayHeaders(ref), signal: AbortSignal.timeout(30000) });
-          if (!res.ok || !res.body) return null;
-          const buf = new Uint8Array(await res.arrayBuffer());
-          if (!buf.length) return null;
-          const key = msg.kind === "audio" ? `hls/${msg.jobId}/audio/${audioName(s.i)}` : `hls/${msg.jobId}/${msg.height}p/${segName(s.i)}`;
-          await env.watch_bucket.put(key, buf, {
-            httpMetadata: { contentType: msg.kind === "audio" ? "audio/mp2t" : "video/mp2t" },
-          });
-          return buf.length;
-        } catch {
-          return null;
-        }
+    await Promise.all(
+      msg.segs.slice(i, i + PAR).map(async (s) => {
+        const key = keyOf(s.i);
+        // A delivery that comes again (a retry, a repair) skips what is already stored.
+        if (await env.watch_bucket.head(key)) return;
+        const result = await storeSegment(env, s.u, ref, key, msg.kind === "audio" ? "audio/mp2t" : "video/mp2t");
+        if (result === "ok") return;
+        if (result === "gone") refused.count++;
+        missing.push(s.i);
       }),
     );
-    for (const n of results) {
-      if (n) {
-        ok++;
-        bytes += n;
+  }
+  await recount(env, msg.jobId);
+  if (refused.count > 0) {
+    // The origin says the segment will never be there (404, 403 and the like): retrying cannot help.
+    await failJob(env, msg.jobId, "segment_unavailable");
+    return;
+  }
+  // A segment lost after its retries must not vanish quietly: the queue delivers this batch again, and what is stored is skipped.
+  if (missing.length) throw new Error(`segments_missing:${missing.length}`);
+  await maybeFinalize(env, msg.jobId);
+}
+
+/** Tries for one segment before the batch reports it missing; the pause grows. */
+const SEGMENT_ATTEMPTS = 4;
+/** The origin answered that the segment does not exist, so there is no point asking again. A 403 or a 429 can pass, so it is retried. */
+const GONE = new Set([404, 410]);
+
+/** Fetches one segment into R2. `retry` means it may work later; `gone` means the origin refused it for good. */
+export async function storeSegment(
+  env: Env,
+  url: string,
+  referer: string | null,
+  key: string,
+  contentType: string,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<"ok" | "retry" | "gone"> {
+  for (let attempt = 0; attempt < SEGMENT_ATTEMPTS; attempt++) {
+    if (attempt) await wait(500 * 2 ** attempt);
+    try {
+      const res = await fetch(url, { headers: relayHeaders(referer), signal: AbortSignal.timeout(30000) });
+      if (GONE.has(res.status)) {
+        void res.body?.cancel();
+        return "gone";
       }
+      if (!res.ok || !res.body) continue;
+      const buf = new Uint8Array(await res.arrayBuffer());
+      if (!buf.length) continue;
+      await env.watch_bucket.put(key, buf, { httpMetadata: { contentType } });
+      return "ok";
+    } catch {
+      // a timeout or a reset: try again
     }
   }
-  if (ok) {
-    await env.watch
-      .prepare("UPDATE hls_job SET done = done + ?, bytes = bytes + ?, updated_at = ? WHERE id = ?")
-      .bind(ok, bytes, new Date().toISOString(), msg.jobId)
-      .run();
+  return "retry";
+}
+
+/** Counts the segments really in R2 and records it. The count is the truth, so a redelivery or a crash cannot skew it. */
+export async function recount(env: Env, jobId: string): Promise<{ done: number; bytes: number }> {
+  let cursor: string | undefined;
+  let done = 0;
+  let bytes = 0;
+  do {
+    const page = await env.watch_bucket.list({ prefix: `hls/${jobId}/`, cursor, limit: 1000 });
+    for (const object of page.objects) {
+      if (/\/(seg|a)\d{6}\.ts$/.test(object.key)) {
+        done++;
+        bytes += object.size;
+      }
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  // MAX: two batches can finish together, and the one that listed first must not write a smaller number over the other.
+  await env.watch
+    .prepare(
+      `UPDATE hls_job SET done = MAX(done, ?), bytes = MAX(bytes, ?), updated_at = ?
+       WHERE id = ? AND status IN ('saving', 'finalizing')`,
+    )
+    .bind(done, bytes, new Date().toISOString(), jobId)
+    .run();
+  return { done, bytes };
+}
+
+/** Ends a job that cannot finish: says why, and frees what it had stored so a new save starts clean. */
+async function failJob(env: Env, jobId: string, reason: string): Promise<void> {
+  await env.watch
+    .prepare("UPDATE hls_job SET status = 'error', error = ?, updated_at = ? WHERE id = ? AND status IN ('saving', 'finalizing')")
+    .bind(reason.slice(0, 500), new Date().toISOString(), jobId)
+    .run();
+  await purgeJob(env, jobId);
+}
+
+/**
+ * Cron: a saving job that has made no progress for a while is not left sitting there. It is rebuilt from its playlist, the
+ * missing segments are queued again (up to `REPAIRS` times), and then it fails with the reason, so the app can say so.
+ */
+export async function sweepStalled(env: Env): Promise<void> {
+  const cutoff = new Date(Date.now() - STALLED_MS).toISOString();
+  const jobs = await env.watch
+    .prepare("SELECT id, variant_url, referer, vheight, total, done, error FROM hls_job WHERE status = 'saving' AND updated_at < ? LIMIT 20")
+    .bind(cutoff)
+    .all<{ id: string; variant_url: string; referer: string | null; vheight: number; total: number; done: number; error: string | null }>();
+  for (const job of jobs.results ?? []) {
+    try {
+      const { done } = await recount(env, job.id);
+      const tries = Number(/^repair (\d+)/.exec(job.error ?? "")?.[1] ?? 0);
+      if (done >= job.total) {
+        await maybeFinalize(env, job.id);
+        continue;
+      }
+      if (tries >= REPAIRS) {
+        await failJob(env, job.id, `stalled: ${done} of ${job.total} segments saved`);
+        continue;
+      }
+      const res = await fetch(job.variant_url, { headers: relayHeaders(job.referer), signal: AbortSignal.timeout(15000) });
+      if (!res.ok) {
+        await failJob(env, job.id, `stalled: ${done} of ${job.total} segments saved, playlist ${res.status}`);
+        continue;
+      }
+      const base = job.variant_url.slice(0, job.variant_url.lastIndexOf("/") + 1);
+      const segs = parseMediaSegments(await res.text(), base).map((s, i) => ({ i, u: s.u }));
+      const stored = new Set<number>();
+      let cursor: string | undefined;
+      do {
+        const page = await env.watch_bucket.list({ prefix: `hls/${job.id}/${job.vheight}p/`, cursor, limit: 1000 });
+        for (const object of page.objects) {
+          const m = /seg(\d{6})\.ts$/.exec(object.key);
+          if (m) stored.add(Number(m[1]));
+        }
+        cursor = page.truncated ? page.cursor : undefined;
+      } while (cursor);
+      const lacking = segs.filter((s) => !stored.has(s.i));
+      if (!lacking.length) {
+        // The video is whole, so what is lacking is the audio, whose playlist is not kept: it cannot be rebuilt.
+        await failJob(env, job.id, `stalled: ${done} of ${job.total} segments saved, audio incomplete`);
+        continue;
+      }
+      await env.watch
+        .prepare("UPDATE hls_job SET error = ?, updated_at = ? WHERE id = ?")
+        .bind(`repair ${tries + 1}`, new Date().toISOString(), job.id)
+        .run();
+      await enqueueSegments(env, job.id, job.vheight, job.referer, lacking);
+    } catch (error) {
+      console.log(JSON.stringify({ event: "hls_sweep_error", job: job.id, error: String(error).slice(0, 200) }));
+    }
   }
-  await maybeFinalize(env, msg.jobId);
 }
 
 class SaveCheckError extends Error {}

@@ -7,8 +7,9 @@
 
 import type { Env } from "../env";
 import { edgeCache } from "../lib.ts";
+import { embedAvailable } from "./embed.ts";
+import { embedTemplate, fill } from "./embeds.ts";
 import { Source, type SearchResult, type StreamInfo } from "./index";
-import { buildEmbedUrls } from "./rivestream";
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const TMDB_IMAGE = "https://image.tmdb.org/t/p/w500";
@@ -92,6 +93,19 @@ function toResult(hit: TmdbHit): SearchResult {
   };
 }
 
+/** Gives a result its stream page (the configured template, with ${season} and ${episode} left for the app) and whether
+ * that page resolves. */
+async function withEmbed(result: SearchResult, env: Env): Promise<SearchResult> {
+  if (!result.tmdbId) return result;
+  const template = embedTemplate(env, result.type === "series" ? "tv" : "movie");
+  const page = fill(template, { id: result.tmdbId, season: 1, episode: 1 });
+  return {
+    ...result,
+    embed: fill(template, { id: result.tmdbId }),
+    available: await embedAvailable(`${result.type}/${result.tmdbId}/${new URL(page).host}`, page),
+  };
+}
+
 export const sourceMeta: Source = {
   key: "meta",
   name: "TMDB",
@@ -101,7 +115,8 @@ export const sourceMeta: Source = {
     if (!res.ok) return [];
     const data = await res.json() as { results?: TmdbHit[] };
     const hits = (data.results ?? []).filter((r) => r.media_type === "movie" || r.media_type === "tv").slice(0, 10);
-    return hits.map((r) => toResult(r));
+    // Every hit is checked against the stream pages, in parallel, so "available" means a page exists there.
+    return Promise.all(hits.map((r) => withEmbed(toResult(r), env)));
   },
 
   async searchByImdb(imdbId: string, env: Env): Promise<SearchResult | null> {
@@ -115,7 +130,7 @@ export const sourceMeta: Source = {
     hit.media_type = movie ? "movie" : "tv";
     const result = toResult(hit);
     result.imdbId = imdbId;
-    return result;
+    return withEmbed(result, env);
   },
 
   async seasons(env: Env, tmdbId: number): Promise<{ number: number; name: string; episodeCount: number }[]> {
@@ -149,7 +164,7 @@ export const sourceMeta: Source = {
     if (!res.ok) return null;
     const detail = await res.json() as { title?: string; name?: string; release_date?: string; first_air_date?: string; poster_path?: string | null; external_ids?: { imdb_id?: string } };
 
-    const links = buildEmbedUrls(tmdbId, mediaType, season, episode);
+    const embedUrl = fill(embedTemplate(env, mediaType), { id: tmdbId, season, episode });
     const aired = detail.release_date || detail.first_air_date;
     const title = mediaType === "tv" ? `${detail.name || "Episode"} S${season}E${episode}` : (detail.title || "");
     return {
@@ -158,8 +173,8 @@ export const sourceMeta: Source = {
       year: aired ? Number(aired.slice(0, 4)) : null,
       imdbId: detail.external_ids?.imdb_id ?? null,
       poster: detail.poster_path ? `${TMDB_IMAGE}${detail.poster_path}` : null,
-      hlsUrl: links.embedUrl,
-      ...links,
+      hlsUrl: embedUrl,
+      embedUrl,
       qualities: [],
       subtitles: [],
     };

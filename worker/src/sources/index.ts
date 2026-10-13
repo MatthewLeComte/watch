@@ -16,6 +16,10 @@ export type SearchResult = {
   imdbId: string | null;
   poster: string | null;
   type: "movie" | "series";
+  /** Whether the stream page for this title resolves: true, false (it does not exist there), or null (not known). */
+  available?: boolean | null;
+  /** The title's stream page, with `${season}` and `${episode}` still in it for a series. The apps build no stream URL of their own. */
+  embed?: string;
 };
 
 export type StreamInfo = {
@@ -28,10 +32,10 @@ export type StreamInfo = {
   hlsUrl: string;
   /** Same as hlsUrl, named honestly. */
   embedUrl: string;
-  /** Documented variants from /embed/docs. */
-  torrentUrl: string;
-  aggUrl: string;
-  downloadUrl: string;
+  /** Provider-specific variants (the Rive source only). A configured embed template has none. */
+  torrentUrl?: string;
+  aggUrl?: string;
+  downloadUrl?: string;
   /** Always empty: the worker does not extract variants. The client picks. */
   qualities: Quality[];
   /** Always empty: the worker does not extract subtitles. The client picks. */
